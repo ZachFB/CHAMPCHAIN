@@ -4,3 +4,4 @@ dist/
 .anchor/
 test-ledger/
 .DS_Store
+.env

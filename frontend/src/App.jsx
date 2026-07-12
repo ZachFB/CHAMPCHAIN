@@ -21,7 +21,7 @@ import { getPredictionMarketIdl } from "./idl/index.js";
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 const PROGRAM_ID       = new PublicKey("7QvFHwKAQQaMsERG6pYLVaeMzac79R18arTpzEc6J7u3");
 const TXLINE_PROGRAM_ID = new PublicKey("6pW64gN1s2uqjHkn1unFeEjAwJkPGHoppGvS715wyP2J");
-const NETWORK          = clusterApiUrl("devnet");
+const NETWORK          = import.meta.env.VITE_HELIUS_RPC_URL || clusterApiUrl("devnet");
 
 // ─── MARKETS ───────────────────────────────────────────────────────────────
 // Deliberately empty. Nothing here is pre-populated, guessed, or staged in
