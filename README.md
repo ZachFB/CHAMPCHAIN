@@ -172,4 +172,3 @@ and reading the raw SSE bytes by hand; (3) required a doubling-then-binary-searc
 probe against the endpoint itself.
 ```
 
-Félicitations pour le cycle complet — c'est la preuve la plus importante que le projet fonctionne vraiment. Il ne reste plus qu'une seule case non cochée sur toute la checklist : **la vidéo de démo**. C'est littéralement la dernière étape.
