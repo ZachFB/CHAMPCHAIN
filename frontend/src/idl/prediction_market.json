@@ -1,0 +1,772 @@
+{
+  "version": "0.1.0",
+  "name": "prediction_market",
+  "instructions": [
+    {
+      "name": "initializeMarket",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "matchId",
+          "type": "string"
+        },
+        {
+          "name": "fixtureId",
+          "type": "i64"
+        },
+        {
+          "name": "statAKey",
+          "type": "u32"
+        },
+        {
+          "name": "statBKey",
+          "type": {
+            "option": "u32"
+          }
+        },
+        {
+          "name": "period",
+          "type": "i32"
+        },
+        {
+          "name": "predicate",
+          "type": {
+            "defined": "TraderPredicate"
+          }
+        },
+        {
+          "name": "op",
+          "type": {
+            "option": {
+              "defined": "BinaryExpression"
+            }
+          }
+        },
+        {
+          "name": "closeTs",
+          "type": "i64"
+        },
+        {
+          "name": "earliestSettleTs",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "placeBet",
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "bet",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "side",
+          "type": "bool"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "settleMarket",
+      "accounts": [
+        {
+          "name": "settler",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "dailyScoresMerkleRoots",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "txlineProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "ts",
+          "type": "i64"
+        },
+        {
+          "name": "fixtureSummary",
+          "type": {
+            "defined": "ScoresBatchSummary"
+          }
+        },
+        {
+          "name": "fixtureProof",
+          "type": {
+            "vec": {
+              "defined": "ProofNode"
+            }
+          }
+        },
+        {
+          "name": "mainTreeProof",
+          "type": {
+            "vec": {
+              "defined": "ProofNode"
+            }
+          }
+        },
+        {
+          "name": "statA",
+          "type": {
+            "defined": "StatTerm"
+          }
+        },
+        {
+          "name": "statB",
+          "type": {
+            "option": {
+              "defined": "StatTerm"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cancelMarket",
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "claimWinnings",
+      "accounts": [
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "bet",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "setFixtureId",
+      "isMut": false,
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": false,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "fixtureId",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "closeMarket",
+      "isMut": false,
+      "accounts": [
+        {
+          "name": "authority",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "market",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Market",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "publicKey"
+          },
+          {
+            "name": "matchId",
+            "type": "string"
+          },
+          {
+            "name": "fixtureId",
+            "type": "i64"
+          },
+          {
+            "name": "statAKey",
+            "type": "u32"
+          },
+          {
+            "name": "statBKey",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "period",
+            "type": "i32"
+          },
+          {
+            "name": "predicate",
+            "type": {
+              "defined": "TraderPredicate"
+            }
+          },
+          {
+            "name": "op",
+            "type": {
+              "option": {
+                "defined": "BinaryExpression"
+              }
+            }
+          },
+          {
+            "name": "closeTs",
+            "type": "i64"
+          },
+          {
+            "name": "earliestSettleTs",
+            "type": "i64"
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": "Outcome"
+            }
+          },
+          {
+            "name": "totalYes",
+            "type": "u64"
+          },
+          {
+            "name": "totalNo",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "vaultBump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Bet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "publicKey"
+          },
+          {
+            "name": "user",
+            "type": "publicKey"
+          },
+          {
+            "name": "side",
+            "type": "bool"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "ScoresUpdateStats",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "updateCount",
+            "type": "i32"
+          },
+          {
+            "name": "minTimestamp",
+            "type": "i64"
+          },
+          {
+            "name": "maxTimestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScoresBatchSummary",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "fixtureId",
+            "type": "i64"
+          },
+          {
+            "name": "updateStats",
+            "type": {
+              "defined": "ScoresUpdateStats"
+            }
+          },
+          {
+            "name": "eventsSubTreeRoot",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProofNode",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "isRightSibling",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScoreStat",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "key",
+            "type": "u32"
+          },
+          {
+            "name": "value",
+            "type": "i32"
+          },
+          {
+            "name": "period",
+            "type": "i32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "StatTerm",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "statToProve",
+            "type": {
+              "defined": "ScoreStat"
+            }
+          },
+          {
+            "name": "eventStatRoot",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "statProof",
+            "type": {
+              "vec": {
+                "defined": "ProofNode"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TraderPredicate",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "threshold",
+            "type": "i32"
+          },
+          {
+            "name": "comparison",
+            "type": {
+              "defined": "Comparison"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ValidateStatArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "ts",
+            "type": "i64"
+          },
+          {
+            "name": "fixtureSummary",
+            "type": {
+              "defined": "ScoresBatchSummary"
+            }
+          },
+          {
+            "name": "fixtureProof",
+            "type": {
+              "vec": {
+                "defined": "ProofNode"
+              }
+            }
+          },
+          {
+            "name": "mainTreeProof",
+            "type": {
+              "vec": {
+                "defined": "ProofNode"
+              }
+            }
+          },
+          {
+            "name": "predicate",
+            "type": {
+              "defined": "TraderPredicate"
+            }
+          },
+          {
+            "name": "statA",
+            "type": {
+              "defined": "StatTerm"
+            }
+          },
+          {
+            "name": "statB",
+            "type": {
+              "option": {
+                "defined": "StatTerm"
+              }
+            }
+          },
+          {
+            "name": "op",
+            "type": {
+              "option": {
+                "defined": "BinaryExpression"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "Comparison",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "GreaterThan"
+          },
+          {
+            "name": "LessThan"
+          },
+          {
+            "name": "EqualTo"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BinaryExpression",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Add"
+          },
+          {
+            "name": "Subtract"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Outcome",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Pending"
+          },
+          {
+            "name": "Yes"
+          },
+          {
+            "name": "No"
+          },
+          {
+            "name": "Cancelled"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "MatchIdTooLong",
+      "msg": "Match identifier is too long"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidCloseTime",
+      "msg": "close_ts must be in the future"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidSettleTime",
+      "msg": "earliest_settle_ts must be strictly after close_ts"
+    },
+    {
+      "code": 6003,
+      "name": "TooEarlyToSettle",
+      "msg": "Too early to settle: earliest_settle_ts has not been reached"
+    },
+    {
+      "code": 6004,
+      "name": "StaleProof",
+      "msg": "TxLINE proof is too stale to settle this market"
+    },
+    {
+      "code": 6005,
+      "name": "ProofTooLarge",
+      "msg": "Merkle proof is too large"
+    },
+    {
+      "code": 6006,
+      "name": "CancelWindowNotOpen",
+      "msg": "Cancellation is blocked during the permissionless settlement window"
+    },
+    {
+      "code": 6007,
+      "name": "ZeroAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6008,
+      "name": "BettingClosed",
+      "msg": "Betting is closed for this market"
+    },
+    {
+      "code": 6009,
+      "name": "AlreadySettled",
+      "msg": "Market is already resolved"
+    },
+    {
+      "code": 6010,
+      "name": "CannotChangeSide",
+      "msg": "Cannot change side on an existing bet"
+    },
+    {
+      "code": 6011,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6012,
+      "name": "AlreadyClaimed",
+      "msg": "Winnings already claimed"
+    },
+    {
+      "code": 6013,
+      "name": "NothingToClaim",
+      "msg": "Nothing to claim"
+    },
+    {
+      "code": 6014,
+      "name": "NotSettledYet",
+      "msg": "Market is not resolved yet"
+    },
+    {
+      "code": 6015,
+      "name": "LosingBet",
+      "msg": "This bet did not win"
+    },
+    {
+      "code": 6016,
+      "name": "Overflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 6017,
+      "name": "FixtureMismatch",
+      "msg": "Proof does not match this market fixture"
+    },
+    {
+      "code": 6018,
+      "name": "StatKeyMismatch",
+      "msg": "Stat key does not match this market"
+    },
+    {
+      "code": 6019,
+      "name": "PeriodMismatch",
+      "msg": "Stat period does not match this market"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidStatCombination",
+      "msg": "Invalid stat combination"
+    },
+    {
+      "code": 6021,
+      "name": "InvalidTime",
+      "msg": "Invalid timestamp"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidPda",
+      "msg": "Merkle roots account does not match the expected PDA"
+    },
+    {
+      "code": 6023,
+      "name": "InvalidProgramId",
+      "msg": "Invalid program id"
+    },
+    {
+      "code": 6024,
+      "name": "SerializationFailed",
+      "msg": "Serialization failed"
+    },
+    {
+      "code": 6025,
+      "name": "CpiValidationFailed",
+      "msg": "TxLINE CPI validation failed"
+    },
+    {
+      "code": 6026,
+      "name": "MissingReturnData",
+      "msg": "No return data received from TxLINE"
+    }
+  ]
+}
