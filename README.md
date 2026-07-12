@@ -170,5 +170,3 @@ headers, and (3) there's no documented way to discover the latest available
 resolved by pulling the actual devnet IDL from `/documentation/programs/devnet`
 and reading the raw SSE bytes by hand; (3) required a doubling-then-binary-search
 probe against the endpoint itself.
-```
-
