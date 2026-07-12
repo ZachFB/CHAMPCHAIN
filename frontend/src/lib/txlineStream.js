@@ -83,13 +83,17 @@ function parseSseData(data) {
  * @returns {AsyncGenerator<{ event: string, data: any }>}
  */
 export async function* openTxlineStream(kind, { apiOrigin, jwt, apiToken, signal }) {
-  // See vite.config.js's proxy comment: TxLINE's streaming endpoints don't
-  // send CORS headers, so a direct browser fetch to apiOrigin fails with
-  // "Failed to fetch" / CORS error in dev. Going through Vite's dev proxy
-  // makes the browser's request same-origin instead.
+  // Both the Vite dev-server proxy (vite.config.js) and this production
+  // path exist for the exact same reason: TxLINE's streaming endpoints
+  // don't send Access-Control-Allow-Origin, so a direct cross-origin fetch
+  // from the browser fails with a CORS error no matter what. Dev routes
+  // through Vite's own server (same-origin to localhost); production
+  // routes through /api/txline-stream/*, a Vercel Edge Function that makes
+  // the actual cross-origin request server-side instead, then streams the
+  // response back same-origin. See frontend/api/txline-stream/[...path].js.
   const streamUrl = import.meta.env.DEV
     ? `/txline-stream/api/${kind}/stream`
-    : `${apiOrigin}/api/${kind}/stream`;
+    : `/api/txline-stream/api/${kind}/stream`;
   const response = await fetch(streamUrl, {
     headers: {
       Authorization: `Bearer ${jwt}`,
