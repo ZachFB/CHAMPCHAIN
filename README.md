@@ -140,7 +140,7 @@ set too early.
 - [x] Public GitHub repo
 - [x] TxLINE as primary data source (validate_stat CPI + SSE stream)
 - [x] Security audit — 16+ vectors documented
-- [ ] Demo video (5 min max)
+- [x] Demo video (5 min max)
 
 ## TxLINE endpoints/primitives used
 
