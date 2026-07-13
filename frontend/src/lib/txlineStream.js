@@ -17,12 +17,9 @@ function parseSseBlock(block) {
     if (!rawLine || rawLine.startsWith(":")) continue;
 
     const separatorIndex = rawLine.indexOf(":");
-    const field =
-      separatorIndex === -1 ? rawLine : rawLine.slice(0, separatorIndex);
+    const field = separatorIndex === -1 ? rawLine : rawLine.slice(0, separatorIndex);
     const value =
-      separatorIndex === -1
-        ? ""
-        : rawLine.slice(separatorIndex + 1).replace(/^ /, "");
+      separatorIndex === -1 ? "" : rawLine.slice(separatorIndex + 1).replace(/^ /, "");
 
     if (field === "data") message.data += `${value}\n`;
     if (field === "event") message.event = value;
@@ -85,10 +82,7 @@ function parseSseData(data) {
  * @param {{ apiOrigin: string, jwt: string, apiToken: string, signal?: AbortSignal }} opts
  * @returns {AsyncGenerator<{ event: string, data: any }>}
  */
-export async function* openTxlineStream(
-  kind,
-  { apiOrigin, jwt, apiToken, signal },
-) {
+export async function* openTxlineStream(kind, { apiOrigin, jwt, apiToken, signal }) {
   // Both the Vite dev-server proxy (vite.config.js) and this production
   // path exist for the exact same reason: TxLINE's streaming endpoints
   // don't send Access-Control-Allow-Origin, so a direct cross-origin fetch
@@ -98,8 +92,8 @@ export async function* openTxlineStream(
   // the actual cross-origin request server-side instead, then streams the
   // response back same-origin. See frontend/api/txline-stream/[...path].js.
   const streamUrl = import.meta.env.DEV
-    ? `/txline-stream/${kind}/stream`
-    : `/api/txline-stream/${kind}/stream`;
+    ? `/txline-stream/api/${kind}/stream`
+    : `/api/txline-stream/api/${kind}/stream`;
   const response = await fetch(streamUrl, {
     headers: {
       Authorization: `Bearer ${jwt}`,
@@ -115,10 +109,7 @@ export async function* openTxlineStream(
   }
 
   for await (const message of readSseMessages(response)) {
-    yield {
-      event: message.event ?? "message",
-      data: parseSseData(message.data),
-    };
+    yield { event: message.event ?? "message", data: parseSseData(message.data) };
   }
 }
 
