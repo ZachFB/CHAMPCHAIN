@@ -1,4 +1,3 @@
-Excellente nouvelle — le cycle complet fonctionne enfin de bout en bout ! Voici le README intégral, prêt à copier-coller en entier sur GitHub :```markdown
 # ChampChain — Trustless World Cup Prediction Markets
 
 **Track:** Prediction Markets and Settlement — TxODDS World Cup Hackathon
@@ -37,7 +36,7 @@ change a market's meaning after people have bet on it:
 ## Architecture
 
 ```
-User (Phantom wallet, devnet)
+User (wallet, devnet)
   │
   ├─ place_bet()  ──────────────►  PDA Vault (per-market escrow)
   │
@@ -49,7 +48,23 @@ User (Phantom wallet, devnet)
                                    market.outcome = Yes | No
                                         │
   └─ claim_winnings() ◄──────────  Vault releases SOL to winners
+
+Frontend (Vercel) ──► Backend proxy (Render, /backend) ──► TxLINE SSE streams
+                        (long-lived Express process, not a
+                         serverless/edge function — required for
+                         real-time streaming without timeouts)
 ```
+
+The backend proxy exists solely to work around two constraints of
+TxLINE's streaming endpoints: they don't send
+`Access-Control-Allow-Origin` (so a direct browser fetch is blocked by
+CORS), and a serverless/edge function isn't a good fit for a
+long-lived SSE connection. `backend/server.js` makes the request to
+TxLINE server-to-server (never subject to browser CORS) and streams
+the response back to the frontend from a stable, always-on origin.
+See `backend/README.md` (or `backend/server.js` inline comments) for
+details, and set `VITE_BACKEND_URL` in the frontend's environment to
+point at it.
 
 ## TxLINE Integration
 
@@ -116,6 +131,22 @@ npm run dev
 # (mint 4Zao8ocPhmMgq7PdsYWyxvqySMGx7xb9cMftPMkEokRG).
 ```
 
+## Deploying the backend (proxy)
+
+```
+cd backend
+npm install
+npm start
+# → serves GET /api/scores/stream and /api/odds/stream, proxying to
+#   TxLINE server-to-server and streaming the response back.
+```
+
+Deployed on Render (free tier) as a standalone web service, root
+directory `backend`, build command `npm install`, start command
+`npm start`. Note: Render's free tier spins the service down after 15
+minutes of inactivity, with a ~30-60s cold start on the next request —
+worth a "wake-up" ping (`GET /health`) shortly before a live demo.
+
 ## Deploying the frontend
 
 ```
@@ -123,6 +154,11 @@ cd frontend
 npm run build
 npx vercel --prod
 ```
+
+Set `VITE_BACKEND_URL` in Vercel's project environment variables to
+the deployed backend's URL (e.g. `https://champchain.onrender.com`)
+before building, so the frontend knows where to reach the proxy in
+production.
 
 ## Creating and repairing markets
 
