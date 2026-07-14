@@ -72,10 +72,18 @@ export default function ProofFeed({ apiOrigin, jwt, apiToken }) {
           if (cancelled) return;
           if (!live) setLive(true);
           const d = msg.data ?? {};
+          if (!window.__txlineRawLogged) {
+            // Diagnostic ponctuel : affiche la forme exacte du premier
+            // message reçu, pour voir le vrai nom du champ fixture.
+            console.info("[ProofFeed] raw TxLINE score_update payload:", d);
+            window.__txlineRawLogged = true;
+          }
           const p = {
             id: counter.current++,
-            fixtureId: d.fixtureId ?? "—",
-            stat: d.statKey ?? d.gameState ?? "score_update",
+            fixtureId:
+              d.fixtureId ?? d.fixture_id ?? d.matchId ?? d.match_id ??
+              d.fixture?.id ?? d.fixture?.fixtureId ?? "—",
+            stat: d.statKey ?? d.stat_key ?? d.gameState ?? "score_update",
             hash: d.root ? `0x${String(d.root).slice(0, 8)}…` : `0x${hex(8)}…`,
             result: "verified on-chain",
             epochDay: Math.floor(Date.now() / 86_400_000),
