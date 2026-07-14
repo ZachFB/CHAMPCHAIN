@@ -88,12 +88,14 @@ export async function* openTxlineStream(kind, { apiOrigin, jwt, apiToken, signal
   // don't send Access-Control-Allow-Origin, so a direct cross-origin fetch
   // from the browser fails with a CORS error no matter what. Dev routes
   // through Vite's own server (same-origin to localhost); production
-  // routes through /api/txline-stream/*, a Vercel Edge Function that makes
-  // the actual cross-origin request server-side instead, then streams the
-  // response back same-origin. See frontend/api/txline-stream/[...path].js.
+  // routes to a standalone Express backend (see /backend/server.js),
+  // deployed separately (e.g. on Render) because it needs a long-lived
+  // process for SSE, not a short-lived serverless/edge function.
+  // Set VITE_BACKEND_URL in Vercel's project env vars, e.g.
+  // https://champchain-backend.onrender.com
   const streamUrl = import.meta.env.DEV
     ? `/txline-stream/api/${kind}/stream`
-    : `/api/txline-stream/api/${kind}/stream`;
+    : `${import.meta.env.VITE_BACKEND_URL}/api/${kind}/stream`;
   const response = await fetch(streamUrl, {
     headers: {
       Authorization: `Bearer ${jwt}`,
