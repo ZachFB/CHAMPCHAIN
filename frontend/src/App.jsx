@@ -552,9 +552,33 @@ export default function App() {
         data,
       });
 
-      const tx = new anchor.web3.Transaction().add(ix);
+      // The old `connection.confirmTransaction(sig, "confirmed")` form only
+      // waits on a WebSocket signature subscription. If that subscription
+      // doesn't fire cleanly — which happens with some RPC providers,
+      // Helius' devnet endpoint included — web3.js gives up after its
+      // internal timeout and throws "Transaction was not confirmed in
+      // 30.00 seconds", even when the transaction actually landed. Passing
+      // the blockhash + lastValidBlockHeight instead makes it confirm via
+      // both the WebSocket AND a parallel getSignatureStatuses poll, so a
+      // flaky subscription no longer produces a false failure.
+      const latestBlockhash = await connection.getLatestBlockhash("confirmed");
+      const tx = new anchor.web3.Transaction({
+        feePayer: wallet.publicKey,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      }).add(ix);
       const sig = await wallet.sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, "confirmed");
+      const confirmation = await connection.confirmTransaction(
+        {
+          signature: sig,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+        },
+        "confirmed"
+      );
+      if (confirmation.value.err) {
+        throw new Error(`Transaction landed but failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+      }
 
       const acc = await program.account.market.fetch(marketPda);
       return { matchId, sig, acc };
@@ -764,8 +788,8 @@ export default function App() {
     // fail, funds may be lost" warning with no indication of which check
     // actually failed.
     tx.feePayer = wallet.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash();
-    tx.recentBlockhash = blockhash;
+    const latestBlockhash = await connection.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = latestBlockhash.blockhash;
 
     const sim = await connection.simulateTransaction(tx);
     if (sim.value.err) {
@@ -778,7 +802,17 @@ export default function App() {
     }
 
     const sig = await wallet.sendTransaction(tx, connection);
-    await connection.confirmTransaction(sig, "confirmed");
+    // See the comment on placeBetMutation above: the (signature, commitment)
+    // form of confirmTransaction only trusts a WebSocket subscription and
+    // can falsely report "not confirmed" on a flaky one. Passing the
+    // blockhash + lastValidBlockHeight makes it also poll over HTTP.
+    const confirmation = await connection.confirmTransaction(
+      { signature: sig, ...latestBlockhash },
+      "confirmed"
+    );
+    if (confirmation.value.err) {
+      throw new Error(`Settlement landed but failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+    }
 
     const acc = await program.account.market.fetch(marketPda);
     setMarkets(prev => prev.map(m =>
@@ -813,9 +847,20 @@ export default function App() {
       data,
     });
 
-    const tx = new anchor.web3.Transaction().add(ix);
+    const latestBlockhash = await connection.getLatestBlockhash("confirmed");
+    const tx = new anchor.web3.Transaction({
+      feePayer: wallet.publicKey,
+      blockhash: latestBlockhash.blockhash,
+      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+    }).add(ix);
     const sig = await wallet.sendTransaction(tx, connection);
-    await connection.confirmTransaction(sig, "confirmed");
+    const confirmation = await connection.confirmTransaction(
+      { signature: sig, ...latestBlockhash },
+      "confirmed"
+    );
+    if (confirmation.value.err) {
+      throw new Error(`Claim landed but failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+    }
 
     return `Claimed! TX ${sig.slice(0, 12)}…`;
   }, [wallet, connection]);
