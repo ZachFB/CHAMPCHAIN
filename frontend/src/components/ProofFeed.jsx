@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { streamScores } from "../lib/txlineStream.js";
+import { streamScores, streamOdds } from "../lib/txlineStream.js";
 
 const STATS   = ["goals_scored","corner_count","shots_on_target","yellow_cards","offsides","saves"];
 const FX      = ["#50421","#50422","#51204","#51205","#51301","#51302","#51403"];
@@ -70,14 +70,30 @@ export default function ProofFeed({ apiOrigin, jwt, apiToken }) {
       try {
         for await (const msg of streamScores({ apiOrigin, jwt, apiToken, signal: controller.signal })) {
           if (cancelled) return;
-          if (!live) setLive(true);
+
           const d = msg.data ?? {};
           if (!window.__txlineRawLogged) {
-            // Diagnostic ponctuel : affiche la forme exacte du premier
-            // message reçu, pour voir le vrai nom du champ fixture.
-            console.info("[ProofFeed] raw TxLINE score_update payload:", d);
+            // Diagnostic ponctuel : affiche event + payload du premier
+            // message, quel qu'il soit (heartbeat ou score_update).
+            console.info("[ProofFeed] raw TxLINE message — event:", msg.event, "data:", d);
             window.__txlineRawLogged = true;
           }
+
+          // Heartbeats : soit event nommé explicitement, soit un payload
+          // qui ne contient QUE un timestamp (Ts/ts) et rien d'autre — pas
+          // un vrai score_update. On les ignore, on ne les affiche jamais.
+          const dataKeys = typeof d === "object" && d !== null ? Object.keys(d) : [];
+          const isHeartbeat =
+            msg.event === "heartbeat" ||
+            msg.event === "ping" ||
+            (dataKeys.length > 0 && dataKeys.every((k) => /^ts$/i.test(k)));
+
+          // La connexion est prouvée vivante dès le premier message reçu,
+          // heartbeat inclus — pas besoin d'attendre un vrai score_update
+          // pour afficher "LIVE" (les matchs peuvent ne pas être en cours).
+          if (!live) setLive(true);
+          if (isHeartbeat) continue;
+
           const p = {
             id: counter.current++,
             fixtureId:
@@ -106,6 +122,39 @@ export default function ProofFeed({ apiOrigin, jwt, apiToken }) {
 
     return () => { cancelled = true; controller.abort(); clearInterval(sim); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authenticated, apiOrigin, jwt, apiToken]);
+
+  /* DIAGNOSTIC TEMPORAIRE — n'affecte rien dans l'UI, uniquement la
+     console. Le stream `odds` pousse en général ses données AVANT le
+     coup d'envoi (contrairement à `scores`, qui ne parle que pendant le
+     match). Objectif : voir, sans deviner, si les fixtures des demi-
+     finales apparaissent ici plus tôt, et sous quel nom de champ exact.
+     A retirer une fois le bon champ confirmé. */
+  useEffect(() => {
+    if (!authenticated) return;
+    let cancelled = false;
+    let loggedCount = 0;
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        for await (const msg of streamOdds({ apiOrigin, jwt, apiToken, signal: controller.signal })) {
+          if (cancelled) return;
+          const d = msg.data ?? {};
+          const dataKeys = typeof d === "object" && d !== null ? Object.keys(d) : [];
+          const isHeartbeat = dataKeys.length > 0 && dataKeys.every((k) => /^ts$/i.test(k));
+          if (isHeartbeat) continue; // toujours du bruit, on ne loggue que le reste
+          if (loggedCount < 10) {
+            console.info(`[ProofFeed][odds-diag #${loggedCount + 1}] event:`, msg.event, "data:", d);
+            loggedCount++;
+          }
+        }
+      } catch (err) {
+        console.warn("[ProofFeed][odds-diag] stream failed (non-bloquant):", err?.message ?? err);
+      }
+    })();
+
+    return () => { cancelled = true; controller.abort(); };
   }, [authenticated, apiOrigin, jwt, apiToken]);
 
   return (
