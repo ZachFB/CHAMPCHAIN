@@ -16,18 +16,12 @@ const app = express();
 
 const TXLINE_ORIGIN = "https://txline-dev.txodds.com";
 
-// Autorise seulement ton frontend déployé (et le dev local) à appeler ce
-// backend. Remplace FRONTEND_ORIGIN par l'URL réelle de ton site Vercel.
-const ALLOWED_ORIGINS = [
-  process.env.FRONTEND_ORIGIN, // ex: https://champchain-n9in-ecru.vercel.app
-  "http://localhost:5173",
-].filter(Boolean);
-
-app.use(
-  cors({
-    origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
-  })
-);
+// CORS ouvert : ce backend ne stocke aucun secret (le JWT et l'API token
+// viennent du client à chaque requête, jamais gardés côté serveur), et les
+// données proxyées (scores/odds) sont publiques. Pas de risque réel à
+// laisser passer toutes les origines, et ça évite les 404/CORS liés à un
+// mauvais réglage de FRONTEND_ORIGIN pendant le hackathon.
+app.use(cors({ origin: true }));
 
 app.get("/api/:kind/stream", async (req, res) => {
   const { kind } = req.params;
