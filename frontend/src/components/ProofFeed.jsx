@@ -97,9 +97,9 @@ export default function ProofFeed({ apiOrigin, jwt, apiToken }) {
           const p = {
             id: counter.current++,
             fixtureId:
-              d.fixtureId ?? d.fixture_id ?? d.matchId ?? d.match_id ??
+              d.FixtureId ?? d.fixtureId ?? d.fixture_id ?? d.matchId ?? d.match_id ??
               d.fixture?.id ?? d.fixture?.fixtureId ?? "—",
-            stat: d.statKey ?? d.stat_key ?? d.gameState ?? "score_update",
+            stat: d.SuperOddsType ?? d.statKey ?? d.stat_key ?? d.GameState ?? d.gameState ?? "score_update",
             hash: d.root ? `0x${String(d.root).slice(0, 8)}…` : `0x${hex(8)}…`,
             result: "verified on-chain",
             epochDay: Math.floor(Date.now() / 86_400_000),
@@ -125,15 +125,15 @@ export default function ProofFeed({ apiOrigin, jwt, apiToken }) {
   }, [authenticated, apiOrigin, jwt, apiToken]);
 
   /* DIAGNOSTIC TEMPORAIRE — n'affecte rien dans l'UI, uniquement la
-     console. Le stream `odds` pousse en général ses données AVANT le
-     coup d'envoi (contrairement à `scores`, qui ne parle que pendant le
-     match). Objectif : voir, sans deviner, si les fixtures des demi-
-     finales apparaissent ici plus tôt, et sous quel nom de champ exact.
-     A retirer une fois le bon champ confirmé. */
+     console. Log UN exemple par FixtureId distinct rencontré (pas les N
+     premiers messages bruts) — sinon une rafale de lignes de cote pour un
+     seul match peut saturer le plafond et masquer un autre match déjà en
+     train de streamer en parallèle. Jusqu'à 20 fixtures distincts avant
+     arrêt. A retirer une fois tous les fixtureId des demi-finales confirmés. */
   useEffect(() => {
     if (!authenticated) return;
     let cancelled = false;
-    let loggedCount = 0;
+    const seenFixtures = new Set();
     const controller = new AbortController();
 
     (async () => {
@@ -144,10 +144,19 @@ export default function ProofFeed({ apiOrigin, jwt, apiToken }) {
           const dataKeys = typeof d === "object" && d !== null ? Object.keys(d) : [];
           const isHeartbeat = dataKeys.length > 0 && dataKeys.every((k) => /^ts$/i.test(k));
           if (isHeartbeat) continue; // toujours du bruit, on ne loggue que le reste
-          if (loggedCount < 10) {
-            console.info(`[ProofFeed][odds-diag #${loggedCount + 1}] event:`, msg.event, "data:", d);
-            loggedCount++;
+
+          const fid = d.FixtureId ?? d.fixtureId ?? "unknown";
+          if (!seenFixtures.has(fid)) {
+            seenFixtures.add(fid);
+            console.info(
+              `[ProofFeed][odds-diag] NOUVEAU fixture #${seenFixtures.size} — FixtureId: ${fid}`,
+              "event:", msg.event, "data:", d
+            );
           }
+          // Pas de plafond : on veut voir TOUS les fixtures distincts que
+          // TxLINE streame, quel que soit leur nombre. Arrête toi-même
+          // (bouton stop / ferme l'onglet) une fois que tu as ce qu'il te
+          // faut — le stream continuerait sinon indéfiniment.
         }
       } catch (err) {
         console.warn("[ProofFeed][odds-diag] stream failed (non-bloquant):", err?.message ?? err);
