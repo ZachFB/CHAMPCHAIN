@@ -52,7 +52,7 @@ export default function Footer({ programId }) {
             </li>
             <li>
               <a
-                href="https://txline.txodds.com/documentation"
+                href="https://txline.txodds.com/documentation/quickstart"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-haze hover:text-card-yes transition inline-flex items-center gap-1.5"
