@@ -4,6 +4,16 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 
 gsap.registerPlugin(ScrollTrigger);
 
+// Mobile browsers resize the viewport (a few dozen px) purely from the
+// address bar collapsing/expanding as you scroll — that's not a real
+// layout change, but ScrollTrigger's default behavior treats any resize
+// as a signal to recalculate every trigger's position. Recalculating
+// mid-scroll, using a viewport height that's mid-transition, is exactly
+// what was making sections need to be scrolled well past their actual
+// position before their reveal fired. This tells ScrollTrigger to ignore
+// resizes caused specifically by that mobile browser-chrome collapse.
+ScrollTrigger.config({ ignoreMobileResize: true });
+
 const prefersReducedMotion = () =>
   typeof window !== "undefined" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
