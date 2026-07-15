@@ -23,13 +23,7 @@ window.addEventListener("load", () => {
   requestAnimationFrame(() => ScrollTrigger.refresh());
 });
 
-// Prefer a dedicated RPC (Helius) when configured — Solana's public
-// clusterApiUrl("devnet") is shared, rate-limited, and prone to slow
-// confirmations under load (the "Transaction was not confirmed in 30.00
-// seconds" warning), which is risky mid-demo. Falls back to the public
-// endpoint if VITE_HELIUS_RPC_URL isn't set, so local dev still works
-// without any extra setup.
-const endpoint = import.meta.env.VITE_HELIUS_RPC_URL || clusterApiUrl("devnet");
+const endpoint = clusterApiUrl("devnet");
 
 // No explicit wallet adapters needed here. Two separate mechanisms cover
 // everything without us hardcoding a single wallet's SDK:
