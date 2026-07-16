@@ -11,7 +11,7 @@ import ProofTicker from "./components/ProofTicker.jsx";
 import ProofFeed from "./components/ProofFeed.jsx";
 import Ball from "./components/Ball.jsx";
 import { toast } from "./components/Toast.jsx";
-import { useMagnetic, useScrollReveal, useMarketsReveal, useClipReveal, useRefreshScrollTriggerOnSettle } from "./hooks/useGsapFx.js";
+import { useMagnetic, useScrollReveal, useMarketsReveal, useClipReveal } from "./hooks/useGsapFx.js";
 import Footer from "./components/Footer.jsx";
 import { useTxlineAuth } from "./hooks/useTxlineAuth.js";
 import { streamScores } from "./lib/txlineStream.js";
@@ -266,7 +266,6 @@ export default function App() {
   const heroRef    = useRef(null);
   const wallet     = useWallet();
   const { connection } = useConnection();
-  useRefreshScrollTriggerOnSettle();
   const [markets,  setMarkets]  = useState(DEMO_MARKETS);
   const [marketTab, setMarketTab] = useState("active");
 

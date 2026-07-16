@@ -1,84 +1,187 @@
 import { useEffect, useRef } from "react";
 import gsap from "gsap";
-import { ScrollTrigger } from "gsap/ScrollTrigger";
-
-gsap.registerPlugin(ScrollTrigger);
 
 const prefersReducedMotion = () =>
   typeof window !== "undefined" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// Vite's hot-reload doesn't always fully tear down a hook's previous
-// ScrollTrigger before the effect re-runs (e.g. editing this file while
-// the dev server is running) — leftover instances pile up, each still
-// contributing to the page's measured scrollable height, which is what
-// causes phantom extra scroll space / "stuck" scrolling. Killing any
-// existing trigger for the same DOM node before creating a new one keeps
-// this to exactly one instance per element no matter how many times the
-// effect re-runs.
-function killExistingTriggersFor(root) {
-  ScrollTrigger.getAll().forEach((st) => {
-    if (st.trigger === root) st.kill();
-  });
-}
-
 /**
- * Every useScrollReveal/useMarketsReveal/useClipReveal instance computes its
- * trigger's "start" position the moment it mounts — before web fonts swap
- * in, before the Ball component's dynamic sizing effect runs, before any
- * image finishes loading. Each of those shifts the page's real layout
- * height slightly, and the error accumulates the further down the page a
- * section sits: the Markets grid (near the top) barely notices, but
- * Architecture / the program badge (much lower) can end up needing a
- * scroll almost to the footer before their measured trigger position is
- * actually reached — which reads as "the reveal is broken" on mobile,
- * even though the animation itself is fine; it's the START point that's
- * wrong. Calling ScrollTrigger.refresh() once the page has genuinely
- * settled recalculates every trigger's position against the final,
- * correct layout — not just the one computed at first mount. Mount this
- * once, at the top level (App), not once per section.
+ * Generic IntersectionObserver-based reveal hook.
+ * Observes child elements matching a selector and triggers a GSAP animation
+ * when they become visible in the viewport.
+ *
+ * @param {string} selector - CSS selector for target elements
+ * @param {Function} setupAnimation - function that receives an element and returns a GSAP timeline/tween
+ * @param {Object} options - IntersectionObserver options
+ * @param {number} options.threshold - visibility ratio (0..1)
+ * @param {string} options.rootMargin - margin around viewport
+ * @param {boolean} options.once - animate only once (true) or every time
  */
-export function useRefreshScrollTriggerOnSettle() {
+function useIntersectionReveal(selector, setupAnimation, options = {}) {
+  const ref = useRef(null);
+
   useEffect(() => {
-    let cancelled = false;
-    const refresh = () => !cancelled && ScrollTrigger.refresh();
+    const root = ref.current;
+    if (!root) return;
 
-    // Fonts swapping in (FOUT -> real font) reflow text height/line-wrap,
-    // which is one of the most common silent causes of this exact bug.
-    if (document.fonts?.ready) {
-      document.fonts.ready.then(refresh);
-    }
-    // Images (e.g. inside Ball / market cards) finishing decode after
-    // mount also shift height — catch the ones still loading right now.
-    const imgs = Array.from(document.images).filter((img) => !img.complete);
-    imgs.forEach((img) => {
-      img.addEventListener("load", refresh, { once: true });
-      img.addEventListener("error", refresh, { once: true });
-    });
-    // Belt-and-suspenders: window "load" fires once every asset (images,
-    // stylesheets) has finished, and a short trailing timeout catches
-    // anything that resizes itself in JS right after mount (Ball's
-    // viewport-based sizing effect included).
-    window.addEventListener("load", refresh);
-    const settleTimer = setTimeout(refresh, 600);
+    const targets = root.querySelectorAll(selector);
+    if (!targets.length) return;
 
-    return () => {
-      cancelled = true;
-      window.removeEventListener("load", refresh);
-      imgs.forEach((img) => {
-        img.removeEventListener("load", refresh);
-        img.removeEventListener("error", refresh);
+    if (prefersReducedMotion()) {
+      targets.forEach((el) => {
+        gsap.set(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", clipPath: "inset(0 0 0 0)" });
       });
-      clearTimeout(settleTimer);
-    };
-  }, []);
+      return;
+    }
+
+    const animated = new Set();
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          const el = entry.target;
+          if (entry.isIntersecting) {
+            if (options.once !== false && animated.has(el)) return;
+            const tl = setupAnimation(el);
+            if (tl) tl.play();
+            if (options.once !== false) animated.add(el);
+          } else if (options.once === false) {
+            animated.delete(el);
+          }
+        });
+      },
+      {
+        threshold: options.threshold ?? 0.15,
+        rootMargin: options.rootMargin ?? "0px 0px -50px 0px",
+        ...options,
+      }
+    );
+
+    targets.forEach((el) => {
+      observer.observe(el);
+    });
+
+    return () => observer.disconnect();
+  }, [selector, setupAnimation, options]);
+
+  return ref;
 }
 
 /**
- * Magnetic hover: the element eases toward the cursor within its own
- * bounds, then springs back on leave. Used on primary CTAs — cheap to
- * add, disproportionately makes a button feel "premium."
+ * Single-element version for useClipReveal.
  */
+function useSingleIntersectionReveal(setupAnimation, options = {}) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    if (prefersReducedMotion()) {
+      gsap.set(el, { opacity: 1, clipPath: "inset(0 0 0 0)", x: 0 });
+      return;
+    }
+
+    let animated = false;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && !animated) {
+            const tl = setupAnimation(el);
+            if (tl) tl.play();
+            if (options.once !== false) animated = true;
+          }
+        });
+      },
+      {
+        threshold: options.threshold ?? 0.2,
+        rootMargin: options.rootMargin ?? "0px 0px -50px 0px",
+      }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [setupAnimation, options]);
+
+  return ref;
+}
+
+// ---------------------- HOOKS FOR YOUR COMPONENTS ----------------------
+
+/**
+ * Classic fade + lift reveal for sections.
+ * Replaces useScrollReveal.
+ */
+export function useScrollReveal(selector, opts = {}) {
+  return useIntersectionReveal(
+    selector,
+    (el) => {
+      gsap.set(el, { opacity: 0, y: 48, scale: 0.92 });
+      return gsap.to(el, {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        duration: 1.0,
+        ease: "power3.out",
+        paused: true,
+      });
+    },
+    {
+      threshold: opts.threshold ?? 0.15,
+      rootMargin: opts.rootMargin ?? "0px 0px -30px 0px",
+      once: true,
+      stagger: opts.stagger ?? 0.15,
+    }
+  );
+}
+
+/**
+ * Market grid reveal with scale + blur + back.out bounce.
+ * Replaces useMarketsReveal.
+ */
+export function useMarketsReveal(selector, opts = {}) {
+  return useIntersectionReveal(
+    selector,
+    (el) => {
+      gsap.set(el, { opacity: 0, y: 60, scale: 0.88, filter: "blur(6px)" });
+      return gsap.to(el, {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        filter: "blur(0px)",
+        duration: 0.9,
+        ease: "back.out(1.6)",
+        paused: true,
+      });
+    },
+    {
+      threshold: opts.threshold ?? 0.12,
+      rootMargin: opts.rootMargin ?? "0px 0px -20px 0px",
+      once: true,
+      stagger: opts.stagger ?? 0.12,
+    }
+  );
+}
+
+/**
+ * Clip-path curtain reveal for headings.
+ * Replaces useClipReveal.
+ */
+export function useClipReveal() {
+  return useSingleIntersectionReveal((el) => {
+    gsap.set(el, { clipPath: "inset(0 100% 0 0)", x: -12, opacity: 1 });
+    return gsap.to(el, {
+      clipPath: "inset(0 0% 0 0)",
+      x: 0,
+      duration: 0.9,
+      ease: "power4.out",
+      paused: true,
+    });
+  }, { once: true });
+}
+
+// ---------------------- MAGNETIC & TILT (unchanged) ----------------------
+
 export function useMagnetic(strength = 0.35) {
   const ref = useRef(null);
 
@@ -110,11 +213,6 @@ export function useMagnetic(strength = 0.35) {
   return ref;
 }
 
-/**
- * 3D tilt-on-hover for cards: rotates toward the cursor with a subtle
- * lift and a sheen that tracks the light angle. This is the signature
- * micro-interaction for market cards — betting slips that feel physical.
- */
 export function useTilt(maxDeg = 7) {
   const ref = useRef(null);
 
@@ -129,8 +227,8 @@ export function useTilt(maxDeg = 7) {
 
     function onMove(e) {
       const r = el.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width;   // 0..1
-      const py = (e.clientY - r.top) / r.height;   // 0..1
+      const px = (e.clientX - r.left) / r.width;
+      const py = (e.clientY - r.top) / r.height;
       ryTo((px - 0.5) * maxDeg * 2);
       rxTo(-(py - 0.5) * maxDeg * 2);
       liftTo(-6);
@@ -153,161 +251,8 @@ export function useTilt(maxDeg = 7) {
 }
 
 /**
- * Scroll reveal: fades/lifts children of the given selector in as they
- * cross the viewport, staggered. One ScrollTrigger batch per section
- * instead of scattering timelines everywhere.
- */
-export function useScrollReveal(selector, opts = {}) {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const root = ref.current;
-    if (!root) return;
-    const targets = root.querySelectorAll(selector);
-    if (!targets.length) return;
-    killExistingTriggersFor(root);
-
-    if (prefersReducedMotion()) {
-      gsap.set(targets, { opacity: 1, y: 0, scale: 1 });
-      return;
-    }
-
-    // Bigger travel distance (48px, was 28) + a touch more scale-up (0.92,
-    // was 0.97) + a longer, softer duration — the previous version was too
-    // subtle to read as a deliberate "entrance" rather than a slight jitter,
-    // especially for elements already partly in view when the trigger fires.
-    gsap.set(targets, { opacity: 0, y: 48, scale: 0.92 });
-    const tween = gsap.to(targets, {
-      opacity: 1,
-      y: 0,
-      scale: 1,
-      duration: 1.0,
-      ease: "power3.out",
-      stagger: opts.stagger ?? 0.15,
-      scrollTrigger: {
-        trigger: root,
-        start: "top 78%",
-        once: true,
-      },
-    });
-
-    return () => {
-      tween.scrollTrigger?.kill();
-      tween.kill();
-    };
-  }, [selector, opts.stagger]);
-
-  return ref;
-}
-
-/**
- * Scroll reveal, "market grid" flavor: same idea as useScrollReveal but
- * deliberately more dramatic — cards scale up from slightly small with a
- * soft blur-to-sharp resolve and a slight bounce on landing, instead of a
- * plain fade+lift. Reserved for the markets grid specifically (the section
- * most worth making memorable in a demo); everything else keeps the calmer
- * useScrollReveal so the page doesn't feel busy.
- *
- * Previously this also added `rotationX` + `transformPerspective` for a 3D
- * tilt — removed. Rotating a card in 3D space changes its rendered
- * bounding box in a way that can transiently poke outside its container's
- * normal flow width, and depending on the browser that can register as
- * real horizontal overflow on the page (a second, horizontal scrollbar,
- * and scroll position calculations that never quite resolve back to a
- * clean "bottom of page"). Scale + blur alone still reads as a deliberate,
- * elevated entrance without that risk.
- */
-export function useMarketsReveal(selector, opts = {}) {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const root = ref.current;
-    if (!root) return;
-    const targets = root.querySelectorAll(selector);
-    if (!targets.length) return;
-    killExistingTriggersFor(root);
-
-    if (prefersReducedMotion()) {
-      gsap.set(targets, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)" });
-      return;
-    }
-
-    gsap.set(targets, {
-      opacity: 0,
-      y: 60,
-      scale: 0.88,
-      filter: "blur(6px)",
-    });
-    const tween = gsap.to(targets, {
-      opacity: 1,
-      y: 0,
-      scale: 1,
-      filter: "blur(0px)",
-      duration: 0.9,
-      ease: "back.out(1.6)",
-      stagger: opts.stagger ?? 0.12,
-      scrollTrigger: {
-        trigger: root,
-        start: "top 82%",
-        once: true,
-      },
-    });
-
-    return () => {
-      tween.scrollTrigger?.kill();
-      tween.kill();
-    };
-  }, [selector, opts.stagger]);
-
-  return ref;
-}
-
-/**
- * Section heading reveal: a curtain-wipe via clip-path (instead of a plain
- * fade) — the heading unmasks left-to-right with a slight horizontal
- * settle. Meant for the big section titles ("Active markets", "Settlement
- * architecture", etc.) so each new section announces itself distinctly
- * rather than every element on the page fading in the same way.
- */
-export function useClipReveal() {
-  const ref = useRef(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    killExistingTriggersFor(el);
-
-    if (prefersReducedMotion()) {
-      gsap.set(el, { clipPath: "inset(0 0 0 0)", x: 0, opacity: 1 });
-      return;
-    }
-
-    gsap.set(el, { clipPath: "inset(0 100% 0 0)", x: -12, opacity: 1 });
-    const tween = gsap.to(el, {
-      clipPath: "inset(0 0% 0 0)",
-      x: 0,
-      duration: 0.9,
-      ease: "power4.out",
-      scrollTrigger: {
-        trigger: el,
-        start: "top 85%",
-        once: true,
-      },
-    });
-
-    return () => {
-      tween.scrollTrigger?.kill();
-      tween.kill();
-    };
-  }, []);
-
-  return ref;
-}
-
-/**
- * Animates a numeric value from its previous render to the next with a
- * tabular-looking count, instead of the DOM just snapping to the new
- * number. Pass the *display* string setter; the hook handles the tween.
+ * Animate a numeric value with a smooth tween.
+ * Replaces the old useAnimatedNumber – unchanged.
  */
 export function useAnimatedNumber(value, { decimals = 3, onUpdate } = {}) {
   const prev = useRef(value);
@@ -327,6 +272,5 @@ export function useAnimatedNumber(value, { decimals = 3, onUpdate } = {}) {
     });
     prev.current = value;
     return () => tween.kill();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
+  }, [value, decimals, onUpdate]);
 }
