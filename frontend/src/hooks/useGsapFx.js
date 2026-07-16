@@ -58,6 +58,8 @@ function useIntersectionReveal(selector, setupAnimation, options = {}) {
     );
 
     targets.forEach((el) => {
+      // Indiquer au navigateur les propriétés qui vont être animées pour l'optimisation GPU
+      gsap.set(el, { willChange: "transform, opacity" });
       observer.observe(el);
     });
 
@@ -99,6 +101,7 @@ function useSingleIntersectionReveal(setupAnimation, options = {}) {
       }
     );
 
+    gsap.set(el, { willChange: "transform, clip-path" });
     observer.observe(el);
     return () => observer.disconnect();
   }, [setupAnimation, options]);
@@ -136,19 +139,19 @@ export function useScrollReveal(selector, opts = {}) {
 }
 
 /**
- * Market grid reveal with scale + blur + back.out bounce.
+ * Market grid reveal with scale + bounce (no blur – mobile-friendly).
  * Replaces useMarketsReveal.
  */
 export function useMarketsReveal(selector, opts = {}) {
   return useIntersectionReveal(
     selector,
     (el) => {
-      gsap.set(el, { opacity: 0, y: 60, scale: 0.88, filter: "blur(6px)" });
+      // État initial : légèrement plus petit, translaté, transparent
+      gsap.set(el, { opacity: 0, y: 60, scale: 0.85 });
       return gsap.to(el, {
         opacity: 1,
         y: 0,
         scale: 1,
-        filter: "blur(0px)",
         duration: 0.9,
         ease: "back.out(1.6)",
         paused: true,
@@ -166,6 +169,8 @@ export function useMarketsReveal(selector, opts = {}) {
 /**
  * Clip-path curtain reveal for headings.
  * Replaces useClipReveal.
+ * Note : `clip-path` peut être coûteux sur certains mobiles, mais on l'a compensé par `will-change`.
+ * Si le problème persiste, on pourra le remplacer par une animation de `translateX` + `opacity`.
  */
 export function useClipReveal() {
   return useSingleIntersectionReveal((el) => {
