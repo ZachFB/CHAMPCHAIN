@@ -6,81 +6,72 @@ const prefersReducedMotion = () =>
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
- * Utilitaire : anime tous les enfants d'un conteneur quand il devient visible.
- * Une seule timeline avec stagger, pas de surprises.
+ * Hook générique : observe le conteneur (root). Quand il devient visible,
+ * on anime TOUS les enfants en une seule timeline avec un vrai stagger.
+ * Cela garantit une fluidité parfaite sur mobile.
  */
-function useContainerReveal(selector, buildTimeline, options = {}) {
+function useContainerReveal(selector, setupContainerAnimation, options = {}) {
   const ref = useRef(null);
 
   useEffect(() => {
-    const container = ref.current;
-    if (!container) return;
+    const root = ref.current;
+    if (!root) return;
 
-    const targets = container.querySelectorAll(selector);
+    const targets = root.querySelectorAll(selector);
     if (!targets.length) return;
 
-    // Si l'utilisateur préfère réduire les mouvements
     if (prefersReducedMotion()) {
-      gsap.set(targets, { opacity: 1, y: 0, scale: 1, clipPath: "inset(0 0 0 0)" });
+      targets.forEach((el) => {
+        gsap.set(el, { opacity: 1, y: 0, scale: 1, clipPath: "inset(0 0 0 0)" });
+      });
       return;
     }
 
-    // Construction de la timeline (pausée par défaut)
-    const tl = buildTimeline(targets);
-    tl.pause();
+    let animated = false;
 
-    let played = false;
-
-    // Vérifier si le conteneur est déjà visible
-    const rect = container.getBoundingClientRect();
-    if (rect.top < window.innerHeight && rect.bottom > 0) {
-      played = true;
-      tl.play();
-    } else {
-      // Sinon, on attend qu'il entre dans le viewport
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (played) return;
-          if (entries[0].isIntersecting) {
-            played = true;
-            tl.play();
-            observer.disconnect();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && !animated) {
+            animated = true;
+            // On anime tous les éléments en une seule timeline
+            const tl = setupContainerAnimation(targets);
+            if (tl) tl.play();
           }
-        },
-        {
-          threshold: options.threshold ?? 0.1,
-          rootMargin: options.rootMargin ?? "0px 0px -20px 0px",
-        }
-      );
+        });
+      },
+      {
+        threshold: options.threshold ?? 0.15,
+        rootMargin: options.rootMargin ?? "0px 0px -50px 0px",
+      }
+    );
 
-      observer.observe(container);
-      return () => {
-        observer.disconnect();
-        tl.kill();
-      };
-    }
+    observer.observe(root);
 
-    // Nettoyage si déjà joué
-    return () => {
-      tl.kill();
-    };
-  }, [selector, buildTimeline, options]);
+    return () => observer.disconnect();
+  }, [selector, setupContainerAnimation, options]);
 
   return ref;
 }
 
-// ---------------------- HOOKS À UTILISER DANS VOTRE APP ----------------------
+// ------------------------------------------------------------------
+// EXPOSITION DES HOOKS
+// ------------------------------------------------------------------
 
 /**
- * Fade + lift pour les sections (useScrollReveal).
+ * Scroll reveal classique : fade + lift
+ * Remplacé pour utiliser le conteneur.
  */
 export function useScrollReveal(selector, opts = {}) {
   const stagger = opts.stagger ?? 0.15;
   return useContainerReveal(
     selector,
     (targets) => {
+      // Initialisation
       gsap.set(targets, { opacity: 0, y: 48, scale: 0.92 });
-      return gsap.timeline().to(targets, {
+      // Timeline avec stagger
+      const tl = gsap.timeline({ paused: true });
+      tl.to(targets, {
         opacity: 1,
         y: 0,
         scale: 1,
@@ -88,16 +79,18 @@ export function useScrollReveal(selector, opts = {}) {
         ease: "power3.out",
         stagger,
       });
+      return tl;
     },
     {
-      threshold: opts.threshold ?? 0.1,
+      threshold: opts.threshold ?? 0.15,
       rootMargin: opts.rootMargin ?? "0px 0px -30px 0px",
+      once: true,
     }
   );
 }
 
 /**
- * Grille des marchés : scale + bounce, sans blur, très fluide.
+ * Market grid reveal : scale + bounce, sans blur.
  */
 export function useMarketsReveal(selector, opts = {}) {
   const stagger = opts.stagger ?? 0.12;
@@ -105,7 +98,8 @@ export function useMarketsReveal(selector, opts = {}) {
     selector,
     (targets) => {
       gsap.set(targets, { opacity: 0, y: 60, scale: 0.85 });
-      return gsap.timeline().to(targets, {
+      const tl = gsap.timeline({ paused: true });
+      tl.to(targets, {
         opacity: 1,
         y: 0,
         scale: 1,
@@ -113,16 +107,18 @@ export function useMarketsReveal(selector, opts = {}) {
         ease: "back.out(1.6)",
         stagger,
       });
+      return tl;
     },
     {
-      threshold: opts.threshold ?? 0.1,
+      threshold: opts.threshold ?? 0.12,
       rootMargin: opts.rootMargin ?? "0px 0px -20px 0px",
+      once: true,
     }
   );
 }
 
 /**
- * Clip-reveal pour un élément unique (heading).
+ * Clip reveal pour un élément unique (heading).
  */
 export function useClipReveal() {
   const ref = useRef(null);
@@ -136,38 +132,30 @@ export function useClipReveal() {
       return;
     }
 
-    let played = false;
-    const tl = gsap.timeline({ paused: true });
-    gsap.set(el, { clipPath: "inset(0 100% 0 0)", x: -12, opacity: 1 });
-    tl.to(el, {
-      clipPath: "inset(0 0% 0 0)",
-      x: 0,
-      duration: 0.9,
-      ease: "power4.out",
-    });
-
-    // Vérifier si déjà visible
-    const rect = el.getBoundingClientRect();
-    if (rect.top < window.innerHeight && rect.bottom > 0) {
-      played = true;
-      tl.play();
-    } else {
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (played) return;
-          if (entries[0].isIntersecting) {
-            played = true;
-            tl.play();
-            observer.disconnect();
+    let animated = false;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting && !animated) {
+            animated = true;
+            gsap.set(el, { clipPath: "inset(0 100% 0 0)", x: -12, opacity: 1 });
+            gsap.to(el, {
+              clipPath: "inset(0 0% 0 0)",
+              x: 0,
+              duration: 0.9,
+              ease: "power4.out",
+            });
           }
-        },
-        { threshold: 0.2, rootMargin: "0px 0px -50px 0px" }
-      );
-      observer.observe(el);
-      return () => observer.disconnect();
-    }
+        });
+      },
+      {
+        threshold: 0.2,
+        rootMargin: "0px 0px -50px 0px",
+      }
+    );
 
-    return () => tl.kill();
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   return ref;
