@@ -4,16 +4,6 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 
 gsap.registerPlugin(ScrollTrigger);
 
-// Mobile browsers resize the viewport (a few dozen px) purely from the
-// address bar collapsing/expanding as you scroll — that's not a real
-// layout change, but ScrollTrigger's default behavior treats any resize
-// as a signal to recalculate every trigger's position. Recalculating
-// mid-scroll, using a viewport height that's mid-transition, is exactly
-// what was making sections need to be scrolled well past their actual
-// position before their reveal fired. This tells ScrollTrigger to ignore
-// resizes caused specifically by that mobile browser-chrome collapse.
-ScrollTrigger.config({ ignoreMobileResize: true });
-
 const prefersReducedMotion = () =>
   typeof window !== "undefined" &&
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -30,6 +20,58 @@ function killExistingTriggersFor(root) {
   ScrollTrigger.getAll().forEach((st) => {
     if (st.trigger === root) st.kill();
   });
+}
+
+/**
+ * Every useScrollReveal/useMarketsReveal/useClipReveal instance computes its
+ * trigger's "start" position the moment it mounts — before web fonts swap
+ * in, before the Ball component's dynamic sizing effect runs, before any
+ * image finishes loading. Each of those shifts the page's real layout
+ * height slightly, and the error accumulates the further down the page a
+ * section sits: the Markets grid (near the top) barely notices, but
+ * Architecture / the program badge (much lower) can end up needing a
+ * scroll almost to the footer before their measured trigger position is
+ * actually reached — which reads as "the reveal is broken" on mobile,
+ * even though the animation itself is fine; it's the START point that's
+ * wrong. Calling ScrollTrigger.refresh() once the page has genuinely
+ * settled recalculates every trigger's position against the final,
+ * correct layout — not just the one computed at first mount. Mount this
+ * once, at the top level (App), not once per section.
+ */
+export function useRefreshScrollTriggerOnSettle() {
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => !cancelled && ScrollTrigger.refresh();
+
+    // Fonts swapping in (FOUT -> real font) reflow text height/line-wrap,
+    // which is one of the most common silent causes of this exact bug.
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(refresh);
+    }
+    // Images (e.g. inside Ball / market cards) finishing decode after
+    // mount also shift height — catch the ones still loading right now.
+    const imgs = Array.from(document.images).filter((img) => !img.complete);
+    imgs.forEach((img) => {
+      img.addEventListener("load", refresh, { once: true });
+      img.addEventListener("error", refresh, { once: true });
+    });
+    // Belt-and-suspenders: window "load" fires once every asset (images,
+    // stylesheets) has finished, and a short trailing timeout catches
+    // anything that resizes itself in JS right after mount (Ball's
+    // viewport-based sizing effect included).
+    window.addEventListener("load", refresh);
+    const settleTimer = setTimeout(refresh, 600);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("load", refresh);
+      imgs.forEach((img) => {
+        img.removeEventListener("load", refresh);
+        img.removeEventListener("error", refresh);
+      });
+      clearTimeout(settleTimer);
+    };
+  }, []);
 }
 
 /**
