@@ -6,18 +6,11 @@ const prefersReducedMotion = () =>
   window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 /**
- * Generic IntersectionObserver-based reveal hook.
- * Observes child elements matching a selector and triggers a GSAP animation
- * when they become visible in the viewport.
- *
- * @param {string} selector - CSS selector for target elements
- * @param {Function} setupAnimation - function that receives an element and returns a GSAP timeline/tween
- * @param {Object} options - IntersectionObserver options
- * @param {number} options.threshold - visibility ratio (0..1)
- * @param {string} options.rootMargin - margin around viewport
- * @param {boolean} options.once - animate only once (true) or every time
+ * Hook générique : observe le conteneur (root). Quand il devient visible,
+ * on anime TOUS les enfants en une seule timeline avec un vrai stagger.
+ * Cela garantit une fluidité parfaite sur mobile.
  */
-function useIntersectionReveal(selector, setupAnimation, options = {}) {
+function useContainerReveal(selector, setupContainerAnimation, options = {}) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -29,50 +22,105 @@ function useIntersectionReveal(selector, setupAnimation, options = {}) {
 
     if (prefersReducedMotion()) {
       targets.forEach((el) => {
-        gsap.set(el, { opacity: 1, y: 0, scale: 1, filter: "blur(0px)", clipPath: "inset(0 0 0 0)" });
+        gsap.set(el, { opacity: 1, y: 0, scale: 1, clipPath: "inset(0 0 0 0)" });
       });
       return;
     }
 
-    const animated = new Set();
+    let animated = false;
 
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          const el = entry.target;
-          if (entry.isIntersecting) {
-            if (options.once !== false && animated.has(el)) return;
-            const tl = setupAnimation(el);
+          if (entry.isIntersecting && !animated) {
+            animated = true;
+            // On anime tous les éléments en une seule timeline
+            const tl = setupContainerAnimation(targets);
             if (tl) tl.play();
-            if (options.once !== false) animated.add(el);
-          } else if (options.once === false) {
-            animated.delete(el);
           }
         });
       },
       {
         threshold: options.threshold ?? 0.15,
         rootMargin: options.rootMargin ?? "0px 0px -50px 0px",
-        ...options,
       }
     );
 
-    targets.forEach((el) => {
-      // Indiquer au navigateur les propriétés qui vont être animées pour l'optimisation GPU
-      gsap.set(el, { willChange: "transform, opacity" });
-      observer.observe(el);
-    });
+    observer.observe(root);
 
     return () => observer.disconnect();
-  }, [selector, setupAnimation, options]);
+  }, [selector, setupContainerAnimation, options]);
 
   return ref;
 }
 
+// ------------------------------------------------------------------
+// EXPOSITION DES HOOKS
+// ------------------------------------------------------------------
+
 /**
- * Single-element version for useClipReveal.
+ * Scroll reveal classique : fade + lift
+ * Remplacé pour utiliser le conteneur.
  */
-function useSingleIntersectionReveal(setupAnimation, options = {}) {
+export function useScrollReveal(selector, opts = {}) {
+  const stagger = opts.stagger ?? 0.15;
+  return useContainerReveal(
+    selector,
+    (targets) => {
+      // Initialisation
+      gsap.set(targets, { opacity: 0, y: 48, scale: 0.92 });
+      // Timeline avec stagger
+      const tl = gsap.timeline({ paused: true });
+      tl.to(targets, {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        duration: 1.0,
+        ease: "power3.out",
+        stagger,
+      });
+      return tl;
+    },
+    {
+      threshold: opts.threshold ?? 0.15,
+      rootMargin: opts.rootMargin ?? "0px 0px -30px 0px",
+      once: true,
+    }
+  );
+}
+
+/**
+ * Market grid reveal : scale + bounce, sans blur.
+ */
+export function useMarketsReveal(selector, opts = {}) {
+  const stagger = opts.stagger ?? 0.12;
+  return useContainerReveal(
+    selector,
+    (targets) => {
+      gsap.set(targets, { opacity: 0, y: 60, scale: 0.85 });
+      const tl = gsap.timeline({ paused: true });
+      tl.to(targets, {
+        opacity: 1,
+        y: 0,
+        scale: 1,
+        duration: 0.9,
+        ease: "back.out(1.6)",
+        stagger,
+      });
+      return tl;
+    },
+    {
+      threshold: opts.threshold ?? 0.12,
+      rootMargin: opts.rootMargin ?? "0px 0px -20px 0px",
+      once: true,
+    }
+  );
+}
+
+/**
+ * Clip reveal pour un élément unique (heading).
+ */
+export function useClipReveal() {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -80,7 +128,7 @@ function useSingleIntersectionReveal(setupAnimation, options = {}) {
     if (!el) return;
 
     if (prefersReducedMotion()) {
-      gsap.set(el, { opacity: 1, clipPath: "inset(0 0 0 0)", x: 0 });
+      gsap.set(el, { clipPath: "inset(0 0 0 0)", x: 0, opacity: 1 });
       return;
     }
 
@@ -89,103 +137,31 @@ function useSingleIntersectionReveal(setupAnimation, options = {}) {
       (entries) => {
         entries.forEach((entry) => {
           if (entry.isIntersecting && !animated) {
-            const tl = setupAnimation(el);
-            if (tl) tl.play();
-            if (options.once !== false) animated = true;
+            animated = true;
+            gsap.set(el, { clipPath: "inset(0 100% 0 0)", x: -12, opacity: 1 });
+            gsap.to(el, {
+              clipPath: "inset(0 0% 0 0)",
+              x: 0,
+              duration: 0.9,
+              ease: "power4.out",
+            });
           }
         });
       },
       {
-        threshold: options.threshold ?? 0.2,
-        rootMargin: options.rootMargin ?? "0px 0px -50px 0px",
+        threshold: 0.2,
+        rootMargin: "0px 0px -50px 0px",
       }
     );
 
-    gsap.set(el, { willChange: "transform, clip-path" });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [setupAnimation, options]);
+  }, []);
 
   return ref;
 }
 
-// ---------------------- HOOKS FOR YOUR COMPONENTS ----------------------
-
-/**
- * Classic fade + lift reveal for sections.
- * Replaces useScrollReveal.
- */
-export function useScrollReveal(selector, opts = {}) {
-  return useIntersectionReveal(
-    selector,
-    (el) => {
-      gsap.set(el, { opacity: 0, y: 48, scale: 0.92 });
-      return gsap.to(el, {
-        opacity: 1,
-        y: 0,
-        scale: 1,
-        duration: 1.0,
-        ease: "power3.out",
-        paused: true,
-      });
-    },
-    {
-      threshold: opts.threshold ?? 0.15,
-      rootMargin: opts.rootMargin ?? "0px 0px -30px 0px",
-      once: true,
-      stagger: opts.stagger ?? 0.15,
-    }
-  );
-}
-
-/**
- * Market grid reveal with scale + bounce (no blur – mobile-friendly).
- * Replaces useMarketsReveal.
- */
-export function useMarketsReveal(selector, opts = {}) {
-  return useIntersectionReveal(
-    selector,
-    (el) => {
-      // État initial : légèrement plus petit, translaté, transparent
-      gsap.set(el, { opacity: 0, y: 60, scale: 0.85 });
-      return gsap.to(el, {
-        opacity: 1,
-        y: 0,
-        scale: 1,
-        duration: 0.9,
-        ease: "back.out(1.6)",
-        paused: true,
-      });
-    },
-    {
-      threshold: opts.threshold ?? 0.12,
-      rootMargin: opts.rootMargin ?? "0px 0px -20px 0px",
-      once: true,
-      stagger: opts.stagger ?? 0.12,
-    }
-  );
-}
-
-/**
- * Clip-path curtain reveal for headings.
- * Replaces useClipReveal.
- * Note : `clip-path` peut être coûteux sur certains mobiles, mais on l'a compensé par `will-change`.
- * Si le problème persiste, on pourra le remplacer par une animation de `translateX` + `opacity`.
- */
-export function useClipReveal() {
-  return useSingleIntersectionReveal((el) => {
-    gsap.set(el, { clipPath: "inset(0 100% 0 0)", x: -12, opacity: 1 });
-    return gsap.to(el, {
-      clipPath: "inset(0 0% 0 0)",
-      x: 0,
-      duration: 0.9,
-      ease: "power4.out",
-      paused: true,
-    });
-  }, { once: true });
-}
-
-// ---------------------- MAGNETIC & TILT (unchanged) ----------------------
+// ---------------------- MAGNETIC & TILT (inchangés) ----------------------
 
 export function useMagnetic(strength = 0.35) {
   const ref = useRef(null);
@@ -255,18 +231,12 @@ export function useTilt(maxDeg = 7) {
   return ref;
 }
 
-/**
- * Animate a numeric value with a smooth tween.
- * Replaces the old useAnimatedNumber – unchanged.
- */
 export function useAnimatedNumber(value, { decimals = 3, onUpdate } = {}) {
-  const prev = useRef(value);
   const proxy = useRef({ v: value });
 
   useEffect(() => {
     if (prefersReducedMotion()) {
       onUpdate?.(value.toFixed(decimals));
-      prev.current = value;
       return;
     }
     const tween = gsap.to(proxy.current, {
@@ -275,7 +245,6 @@ export function useAnimatedNumber(value, { decimals = 3, onUpdate } = {}) {
       ease: "power2.out",
       onUpdate: () => onUpdate?.(proxy.current.v.toFixed(decimals)),
     });
-    prev.current = value;
     return () => tween.kill();
   }, [value, decimals, onUpdate]);
 }
