@@ -4,6 +4,15 @@ import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useMutation } from "@tanstack/react-query";
 import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
+// Imported directly from its own package instead of using `anchor.BN` —
+// in the production Vite bundle (not in dev, and not in Solana
+// Playground either, which is why this only showed up after deploying),
+// minification can mangle how `@coral-xyz/anchor`'s namespace re-exports
+// BN, leaving `anchor.BN` pointing at something that isn't a real
+// constructor anymore ("T.BN is not a constructor" — `T` being whatever
+// short name the minifier gave the `anchor` import). Importing the
+// canonical `bn.js` package directly sidesteps that re-export entirely.
+import BN from "bn.js";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import SplitFlap from "./components/SplitFlap.jsx";
@@ -622,7 +631,7 @@ export default function App() {
       // which caused a "writable privilege escalated" CPI error.
       const data = program.coder.instruction.encode("placeBet", {
         side,
-        amount: new anchor.BN(Math.round(amountSol * anchor.web3.LAMPORTS_PER_SOL)),
+        amount: new BN(Math.round(amountSol * anchor.web3.LAMPORTS_PER_SOL)),
       });
 
       const ix = new anchor.web3.TransactionInstruction({
@@ -850,24 +859,24 @@ export default function App() {
     // validation.* comes straight from TxLINE's JSON response — plain JS
     // numbers. The program's i64 fields (ts, fixtureId, minTimestamp,
     // maxTimestamp) need to be real BN instances before the coder encodes
-    // them, same as `amount` is wrapped in `new anchor.BN(...)` for
+    // them, same as `amount` is wrapped in `new BN(...)` for
     // placeBet above — a raw number doesn't have .toTwos(), so encoding
     // one directly throws "src.toTwos is not a function". i32 fields
     // (updateCount, and everything inside statA/statB) don't need this.
     const fixtureSummary = {
-      fixtureId: new anchor.BN(validation.summary.fixtureId),
+      fixtureId: new BN(validation.summary.fixtureId),
       eventsSubTreeRoot: toByteArray32(validation.summary.eventStatsSubTreeRoot),
       updateStats: {
         updateCount: validation.summary.updateStats.updateCount,
-        minTimestamp: new anchor.BN(validation.summary.updateStats.minTimestamp),
-        maxTimestamp: new anchor.BN(validation.summary.updateStats.maxTimestamp),
+        minTimestamp: new BN(validation.summary.updateStats.minTimestamp),
+        maxTimestamp: new BN(validation.summary.updateStats.maxTimestamp),
       },
     };
 
     const tx = buildSettleMarketTx(
       program,
       {
-        ts:             new anchor.BN(validation.ts),
+        ts:             new BN(validation.ts),
         fixtureSummary,
         fixtureProof:   normalizeProof(validation.subTreeProof),
         mainTreeProof:  normalizeProof(validation.mainTreeProof),
