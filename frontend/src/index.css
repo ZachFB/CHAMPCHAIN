@@ -147,6 +147,21 @@ body {
   100% { box-shadow: 0 0 0 0 rgba(220,60,60,0); }
 }
 
+/* ── Final-stage badge — the ONE tournament stage with motion. Every
+   other round (group, R16, QF, semifinal) is a static pill; reserving
+   this pulse for the Final alone is what makes it register as special
+   instead of just being one more animated element among many. Slower
+   than the live-score pulse above (2.2s vs 1.6s) on purpose — this is a
+   "this is the big one" cue, not an urgency signal. ───────────────── */
+.final-pulse-ring {
+  animation: pulse-final 2.2s ease-in-out infinite;
+}
+@keyframes pulse-final {
+  0%   { box-shadow: 0 0 0 0 rgba(245,183,49,0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(245,183,49,0); }
+  100% { box-shadow: 0 0 0 0 rgba(245,183,49,0); }
+}
+
 /* ── Ticker ────────────────────────────────────────────────────── */
 .ticker-track {
   display: flex;

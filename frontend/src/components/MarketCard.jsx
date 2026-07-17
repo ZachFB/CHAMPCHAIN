@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { CircleDot, Target, Flame, Zap, Medal, Trophy } from "lucide-react";
 import ClaimButton from "./ClaimButton.jsx";
 import Spinner from "./Spinner.jsx";
 import { useTilt, useAnimatedNumber } from "../hooks/useGsapFx.js";
@@ -24,6 +25,42 @@ function formatDuration(remainingSeconds) {
   const m = Math.floor((remainingSeconds % 3600) / 60);
   const s = Math.floor(remainingSeconds % 60);
   return `${h}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
+}
+
+// Tournament stage badge. TxLINE's fixture data doesn't expose a
+// verified, documented "round" field we've confirmed the meaning of
+// (only opaque ids like FixtureGroupId/CompetitionId) — so this is NOT
+// derived automatically from any live data. It's a small, explicit
+// lookup we update ourselves as rounds are confirmed (same pattern as
+// App.jsx's MATCH_ID_OVERRIDES for team names), with an honest generic
+// default for anything not yet listed, rather than guessing a stage from
+// data that doesn't actually say what stage a match is.
+const STAGE_BADGES = {
+  group:        { Icon: CircleDot, label: "Group Stage" },
+  round16:      { Icon: Target,    label: "Round of 16" },
+  quarterfinal: { Icon: Flame,     label: "Quarterfinal" },
+  semifinal:    { Icon: Zap,       label: "Semifinal" },
+  third_place:  { Icon: Medal,     label: "3rd Place" },
+  // The only stage with `special: true` — deliberately. Giving every
+  // round its own animated treatment would flatten the effect (nothing
+  // reads as important if everything is emphasized); reserving motion for
+  // the single Final match is what makes it register at a glance.
+  final:        { Icon: Trophy,    label: "Final", special: true },
+};
+
+// Confirmed rounds only. Add to this as later rounds are known — anything
+// not listed here (e.g. still-unconfirmed group matches) falls back to
+// "group" rather than a guess.
+const MATCH_STAGE = {
+  "WC2026-ENG-ARG": "semifinal",
+  "WC2026-FRA-ESP": "semifinal",
+  "WC2026-FRA-ENG": "third_place",
+  "WC2026-FINAL": "final",
+};
+
+function getStageBadge(matchId) {
+  const stage = MATCH_STAGE[matchId] ?? "group";
+  return STAGE_BADGES[stage];
 }
 
 export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting, bettingSide }) {
@@ -52,6 +89,7 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
   const yesPct      = Math.round((totalYes / total) * 100);
   const hasActivity = market.onChain && (totalYes + totalNo) > 0;
   const isClosed   = market.onChain && bettingRemaining <= 0;
+  const stageBadge = getStageBadge(market.matchId);
   // Same rule as App.jsx's isMarketFinished — a market is "finished" only
   // once it's actually confirmed on-chain (not just described locally) and
   // either betting has closed, it's already carrying a real yes/no
@@ -108,10 +146,11 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
   return (
     <div
       ref={tiltRef}
-      className="group relative border border-haze/30 bg-turf-light/60 rounded-sm p-6
+      className={`group relative border rounded-sm p-6 bg-turf-light/60
                  transition-[border-color,box-shadow] duration-300 ease-out will-change-transform
                  hover:border-card-yes/70
-                 hover:shadow-[0_20px_45px_-15px_rgba(245,183,49,0.35)]"
+                 hover:shadow-[0_20px_45px_-15px_rgba(245,183,49,0.35)]
+                 ${stageBadge.special ? "border-card-yes/60" : "border-haze/30"}`}
     >
       {/* Diagonal shimmer sweep, only visible on hover */}
       <div
@@ -123,10 +162,21 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
       <div className="relative" style={{ transform: "translateZ(24px)" }}>
         {/* Match badge */}
         <div className="mb-4">
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-xs text-haze tracking-widest uppercase">
-              {market.matchId}
-            </span>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1 font-mono text-[10px] tracking-widest uppercase
+                           text-card-yes border border-card-yes/30 bg-card-yes/[0.06] px-2 py-0.5 rounded-sm
+                           ${stageBadge.special ? "final-pulse-ring" : ""}`}
+                title={stageBadge.label}
+              >
+                <stageBadge.Icon size={11} strokeWidth={2.25} />
+                {stageBadge.label}
+              </span>
+              <span className="font-mono text-xs text-haze tracking-widest uppercase">
+                {market.matchId}
+              </span>
+            </div>
             {!isComing && (
               <span className={`font-mono text-xs tracking-widest ${isClosed ? "text-card-no" : "text-card-yes"}`}>
                 {bettingCountdown}
@@ -189,16 +239,6 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
         </div>
 
         {/* Bet buttons / settlement */}
-        {/* Four states, matching the Active/Coming/Finished tabs above:
-              - Coming:   fixtureId is still 0 and betting hasn't closed —
-                          market hasn't actually been created for real yet.
-              - Active:   real fixtureId, betting window still open — YES/NO.
-              - Finished, no real outcome: either the fixtureId is still 0
-                          (broken placeholder, can never find a matching
-                          TxLINE proof) or it's a real market whose window
-                          closed but nobody has settled it yet.
-              - Finished, settled: a real yes/no outcome exists — show it
-                          plus the claim button. */}
         {isComing ? (
           <div className="flex items-center justify-center gap-2 font-mono text-[11px] tracking-widest uppercase text-haze border border-haze/20 py-3 rounded-sm">
             <span className="relative flex h-2 w-2">
@@ -277,9 +317,6 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
                   </p>
                 );
               }
-              // Cancelled markets refund the full original stake regardless
-              // of which side it was on — claim_winnings already handles
-              // this on-chain (Outcome::Cancelled => bet.amount).
               return <ClaimButton matchId={market.matchId} onClaim={onClaim} />;
             })()}
           </div>
