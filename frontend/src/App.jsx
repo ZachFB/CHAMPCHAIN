@@ -714,14 +714,37 @@ export default function App() {
       return res.ok ? await res.json() : null;
     }
 
-    let lo = 1;
-    let loBody = await findLatestSeq(lo, market.statAKey);
-    if (!loBody) {
+    // Sequence numbers for a fixture don't necessarily start at 1 — a
+    // match with a lot of tracked events (any real knockout game, easily)
+    // can have its earliest still-available sequence start well above
+    // that, with older ones rotated out server-side. Treating a failed
+    // seq=1 probe as "no data at all" was wrong: it just meant seq=1
+    // specifically wasn't available anymore, not that nothing was. This
+    // first finds ANY sequence that actually exists (exponential probe:
+    // 1, 2, 4, 8, ...), then reuses the same doubling + binary-search
+    // approach as before to walk forward from that point to the true
+    // latest one. No fixture-specific bounds hardcoded — works for any
+    // fixtureId regardless of how much history it has.
+    async function findAnySeq(statKey) {
+      let probe = 1;
+      while (probe <= 1_000_000) {
+        const body = await findLatestSeq(probe, statKey);
+        if (body) return { seq: probe, body };
+        probe *= 2;
+      }
+      return null;
+    }
+
+    const anchor = await findAnySeq(market.statAKey);
+    if (!anchor) {
       throw new Error(
-        `TxLINE has no data at all for fixture ${market.fixtureId} (seq=1 returned nothing) — this fixture may not be tracked, or hasn't started.`
+        `TxLINE has no data at all for fixture ${market.fixtureId} (probed exponentially up to seq=1,000,000, found nothing) — this fixture may not be tracked, or hasn't started.`
       );
     }
-    let hi = 2;
+
+    let lo = anchor.seq;
+    let loBody = anchor.body;
+    let hi = lo * 2;
     let hiBody = await findLatestSeq(hi, market.statAKey);
     while (hiBody) {
       lo = hi;
