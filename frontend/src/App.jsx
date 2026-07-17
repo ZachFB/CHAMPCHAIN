@@ -1,18 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import gsap from "gsap";
-import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useMutation } from "@tanstack/react-query";
 import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
-// Imported directly from its own package instead of using `anchor.BN` —
-// in the production Vite bundle (not in dev, and not in Solana
-// Playground either, which is why this only showed up after deploying),
-// minification can mangle how `@coral-xyz/anchor`'s namespace re-exports
-// BN, leaving `anchor.BN` pointing at something that isn't a real
-// constructor anymore ("T.BN is not a constructor" — `T` being whatever
-// short name the minifier gave the `anchor` import). Importing the
-// canonical `bn.js` package directly sidesteps that re-export entirely.
-import BN from "bn.js";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import SplitFlap from "./components/SplitFlap.jsx";
@@ -21,7 +11,7 @@ import ProofTicker from "./components/ProofTicker.jsx";
 import ProofFeed from "./components/ProofFeed.jsx";
 import Ball from "./components/Ball.jsx";
 import { toast } from "./components/Toast.jsx";
-import { useMagnetic, useScrollReveal, useMarketsReveal, useClipReveal } from "./hooks/useGsapFx.js";
+import { useMagnetic, useScrollReveal, useMarketsReveal, useClipReveal, useRefreshScrollTriggerOnSettle } from "./hooks/useGsapFx.js";
 import Footer from "./components/Footer.jsx";
 import { useTxlineAuth } from "./hooks/useTxlineAuth.js";
 import { streamScores } from "./lib/txlineStream.js";
@@ -69,6 +59,20 @@ const DEMO_MARKETS = [
     // statBKey=2 is England's, not the other way around.
     teamA: "Mexico", teamB: "England",
     question: "Is the combined goal count (Mexico + England) more than 4 (i.e. 5+)?",
+    statAKey: 1, statBKey: 2,
+    onChain: true,
+    totalYes: 0, totalNo: 0,
+  },
+  {
+    id: "final",
+    matchId: "WC2026-FINAL",
+    fixtureId: 18257739,
+    // Confirmed via TxLINE's /api/fixtures/snapshot: Participant1 = Spain,
+    // Participant2 = Argentina. statAKey=1/statBKey=2 matches that order,
+    // though for an "add" market the order doesn't actually change the
+    // outcome (combined goals is commutative either way).
+    teamA: "Spain", teamB: "Argentina",
+    question: "The World Cup Final. Will Spain and Argentina combine for more than 2 goals (3+)?",
     statAKey: 1, statBKey: 2,
     onChain: true,
     totalYes: 0, totalNo: 0,
@@ -139,25 +143,6 @@ function deriveDailyScoresRootsPda(epochDay) {
 
 // Errors that are worth a silent retry (RPC hiccup) vs. errors that should
 // surface to the user immediately (wallet rejected, insufficient funds).
-// Phantom's own "Simulation failed" pre-approval warning is a much
-// stronger signal than the generic "unknown domain" one — it usually
-// means the instruction would genuinely fail on-chain, not just that the
-// program is unrecognized. Simulating here first, before ever asking the
-// wallet to sign, surfaces the SAME failure but with the actual Anchor
-// error message and program logs instead of Phantom's opaque "simulation
-// failed" with no detail.
-async function simulateOrThrow(connection, tx, label) {
-  const sim = await connection.simulateTransaction(tx);
-  if (sim.value.err) {
-    const logs = sim.value.logs || [];
-    const anchorErrorLine = logs.find((l) => l.includes("Error Message:"));
-    const reason = anchorErrorLine
-      ? anchorErrorLine.split("Error Message:")[1].trim()
-      : logs.find((l) => l.includes("Program log:")) ?? JSON.stringify(sim.value.err);
-    throw new Error(`${label} rejected on-chain: ${reason}`);
-  }
-}
-
 function isTransientRpcError(err) {
   const msg = (err?.message || "").toLowerCase();
   return (
@@ -166,48 +151,6 @@ function isTransientRpcError(err) {
     msg.includes("429") ||
     msg.includes("blockhash not found")
   );
-}
-
-// Wallet approval (waiting for the person to click "Approve" in Phantom/
-// Solflare/etc.) can easily eat past a blockhash's ~60-90 second validity
-// window, especially on a sometimes-slow Devnet — that's exactly what
-// "Signature ... has expired: block height exceeded" means: the tx was
-// signed and sent, but too late for the blockhash it was built with. The
-// fix isn't a longer timeout (there's no such setting — validity is a
-// fixed number of blocks), it's retrying with a FRESH blockhash instead of
-// surfacing this as a dead end. `buildTx` receives {blockhash,
-// lastValidBlockHeight} and must return a ready-to-sign Transaction.
-async function sendAndConfirmWithRetry(connection, wallet, buildTx, { maxAttempts = 5 } = {}) {
-  let lastErr;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // "processed" is the least-lagged commitment available — it gives a
-    // blockhash a few seconds fresher than "confirmed" would, which is
-    // pure margin against a slow wallet-approval flow (e.g. Phantom's
-    // "unknown domain" risk warning adding extra clicks/seconds before
-    // the person ever reaches the final Confirm button).
-    const latestBlockhash = await connection.getLatestBlockhash("processed");
-    const tx = await buildTx(latestBlockhash);
-    try {
-      const sig = await wallet.sendTransaction(tx, connection);
-      const confirmation = await connection.confirmTransaction(
-        { signature: sig, ...latestBlockhash },
-        "confirmed"
-      );
-      if (confirmation.value.err) {
-        throw new Error(`Transaction landed but failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
-      }
-      return sig;
-    } catch (err) {
-      lastErr = err;
-      const msg = (err?.message || "").toLowerCase();
-      const expired = msg.includes("block height exceeded") || msg.includes("expired");
-      if (!expired || attempt === maxAttempts - 1) throw err;
-      // Expired and attempts remain: loop again, a fresh blockhash gets
-      // fetched at the top — the person doesn't have to click anything
-      // again since the instructions themselves haven't changed.
-    }
-  }
-  throw lastErr;
 }
 
 // Unwraps wallet-adapter's generic "Unexpected error" wrapper to find the
@@ -337,6 +280,7 @@ export default function App() {
   const heroRef    = useRef(null);
   const wallet     = useWallet();
   const { connection } = useConnection();
+  useRefreshScrollTriggerOnSettle();
   const [markets,  setMarkets]  = useState(DEMO_MARKETS);
   const [marketTab, setMarketTab] = useState("active");
 
@@ -440,6 +384,7 @@ export default function App() {
               ...base,
               onChain: true,
               pda: marketPda.toBase58(),
+              authority: acc.authority.toBase58(),
               fixtureId: acc.fixtureId.toNumber(),
               closeTs: acc.closeTs.toNumber(),
               earliestSettleTs: acc.earliestSettleTs.toNumber(),
@@ -484,6 +429,7 @@ export default function App() {
               predicate,
               onChain: true,
               pda: entry.publicKey.toBase58(),
+              authority: acc.authority.toBase58(),
               closeTs: acc.closeTs.toNumber(),
               earliestSettleTs: acc.earliestSettleTs.toNumber(),
               totalYes: acc.totalYes.toNumber() / anchor.web3.LAMPORTS_PER_SOL,
@@ -551,29 +497,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wallet.publicKey?.toBase58()]);
 
-  // The single ScrollTrigger.refresh() in main.jsx (on window "load") fires
-  // before market data ever arrives — `markets` starts as DEMO_MARKETS and
-  // is replaced by refreshMarketStatus's on-chain read a moment later,
-  // which changes how tall the Markets grid actually is. Every trigger for
-  // everything BELOW it (Architecture, Program badge) was already
-  // positioned against the page's shorter, pre-data height, which is
-  // exactly why they needed to be scrolled well past before firing — not
-  // a mobile-only bug, just far more visible there since mobile viewports
-  // leave less room for error. Refreshing again once `markets` actually
-  // changes — after two animation frames, so the browser has genuinely
-  // finished laying out the new content, not just started rendering it —
-  // re-measures every trigger against the page's real, final height.
-  useEffect(() => {
-    let raf1, raf2;
-    raf1 = requestAnimationFrame(() => {
-      raf2 = requestAnimationFrame(() => ScrollTrigger.refresh());
-    });
-    return () => {
-      cancelAnimationFrame(raf1);
-      if (raf2) cancelAnimationFrame(raf2);
-    };
-  }, [markets]);
-
   // TxLINE authenticated SSE stream — live score badge in header.
   // EventSource can't carry the required Authorization/X-Api-Token headers,
   // so this uses the fetch+ReadableStream client from lib/txlineStream.js.
@@ -631,7 +554,7 @@ export default function App() {
       // which caused a "writable privilege escalated" CPI error.
       const data = program.coder.instruction.encode("placeBet", {
         side,
-        amount: new BN(Math.round(amountSol * anchor.web3.LAMPORTS_PER_SOL)),
+        amount: new anchor.BN(Math.round(amountSol * anchor.web3.LAMPORTS_PER_SOL)),
       });
 
       const ix = new anchor.web3.TransactionInstruction({
@@ -646,26 +569,9 @@ export default function App() {
         data,
       });
 
-      // Simulated once, up front, with its own throwaway blockhash — not
-      // inside the retry loop below, so this doesn't eat into the actual
-      // send attempts' time budget. This is what would have shown Phantom's
-      // "simulation failed" reason in our own console/toast instead of
-      // leaving it opaque.
-      const simBlockhash = await connection.getLatestBlockhash("processed");
-      const simTx = new anchor.web3.Transaction({
-        feePayer: wallet.publicKey,
-        blockhash: simBlockhash.blockhash,
-        lastValidBlockHeight: simBlockhash.lastValidBlockHeight,
-      }).add(ix);
-      await simulateOrThrow(connection, simTx, "Bet");
-
-      const sig = await sendAndConfirmWithRetry(connection, wallet, (latestBlockhash) =>
-        new anchor.web3.Transaction({
-          feePayer: wallet.publicKey,
-          blockhash: latestBlockhash.blockhash,
-          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-        }).add(ix)
-      );
+      const tx = new anchor.web3.Transaction().add(ix);
+      const sig = await wallet.sendTransaction(tx, connection);
+      await connection.confirmTransaction(sig, "confirmed");
 
       const acc = await program.account.market.fetch(marketPda);
       return { matchId, sig, acc };
@@ -723,37 +629,14 @@ export default function App() {
       return res.ok ? await res.json() : null;
     }
 
-    // Sequence numbers for a fixture don't necessarily start at 1 — a
-    // match with a lot of tracked events (any real knockout game, easily)
-    // can have its earliest still-available sequence start well above
-    // that, with older ones rotated out server-side. Treating a failed
-    // seq=1 probe as "no data at all" was wrong: it just meant seq=1
-    // specifically wasn't available anymore, not that nothing was. This
-    // first finds ANY sequence that actually exists (exponential probe:
-    // 1, 2, 4, 8, ...), then reuses the same doubling + binary-search
-    // approach as before to walk forward from that point to the true
-    // latest one. No fixture-specific bounds hardcoded — works for any
-    // fixtureId regardless of how much history it has.
-    async function findAnySeq(statKey) {
-      let probe = 1;
-      while (probe <= 1_000_000) {
-        const body = await findLatestSeq(probe, statKey);
-        if (body) return { seq: probe, body };
-        probe *= 2;
-      }
-      return null;
-    }
-
-    const anchor = await findAnySeq(market.statAKey);
-    if (!anchor) {
+    let lo = 1;
+    let loBody = await findLatestSeq(lo, market.statAKey);
+    if (!loBody) {
       throw new Error(
-        `TxLINE has no data at all for fixture ${market.fixtureId} (probed exponentially up to seq=1,000,000, found nothing) — this fixture may not be tracked, or hasn't started.`
+        `TxLINE has no data at all for fixture ${market.fixtureId} (seq=1 returned nothing) — this fixture may not be tracked, or hasn't started.`
       );
     }
-
-    let lo = anchor.seq;
-    let loBody = anchor.body;
-    let hi = lo * 2;
+    let hi = 2;
     let hiBody = await findLatestSeq(hi, market.statAKey);
     while (hiBody) {
       lo = hi;
@@ -774,15 +657,18 @@ export default function App() {
     const seq = lo;
     console.log(`[attemptSettlement] latest available seq for fixture ${market.fixtureId} is ${seq}`);
 
-    if (market.earliestSettleTs && loBody.ts < market.earliestSettleTs * 1000) {
-      throw new Error(
-        `TxLINE's latest available data for this fixture (seq=${seq}) is dated ` +
-        `${new Date(loBody.ts).toISOString()}, which is still before this market's ` +
-        `earliestSettleTs (${new Date(market.earliestSettleTs * 1000).toISOString()}). ` +
-        `This isn't a bug — TxLINE just hasn't posted anything recent enough for this ` +
-        `fixture yet. Try again later, or settle a different market.`
-      );
-    }
+    // No frontend pre-check for proof freshness anymore: the contract now
+    // gates on a fixed protocol floor (close_ts + 80 min, see
+    // PROOF_FRESHNESS_FLOOR_SECS in lib.rs) instead of the per-market
+    // earliestSettleTs guess, so this should essentially never reject a
+    // genuinely finished match's real proof, for any caller — no special-
+    // casing or on-the-fly correction needed here anymore. If settlement
+    // is still attempted too early for some reason, the on-chain
+    // simulation below surfaces the exact reason (TooEarlyToSettle /
+    // StaleProof) as a plain, readable error instead of failing silently.
+    const provider = getProvider(wallet);
+    const program  = await loadProgram(provider);
+    const [marketPda] = deriveMarketPda(market.matchId);
 
     const validation = loBody;
 
@@ -850,33 +736,30 @@ export default function App() {
       statB = statTermFromResponse(statBBody);
     }
 
-    const provider = getProvider(wallet);
-    const program  = await loadProgram(provider);
-    const [marketPda] = deriveMarketPda(market.matchId);
     const epochDay = Math.floor(validation.ts / 86_400_000);
     const [dailyScoresMerkleRoots] = deriveDailyScoresRootsPda(epochDay);
 
     // validation.* comes straight from TxLINE's JSON response — plain JS
     // numbers. The program's i64 fields (ts, fixtureId, minTimestamp,
     // maxTimestamp) need to be real BN instances before the coder encodes
-    // them, same as `amount` is wrapped in `new BN(...)` for
+    // them, same as `amount` is wrapped in `new anchor.BN(...)` for
     // placeBet above — a raw number doesn't have .toTwos(), so encoding
     // one directly throws "src.toTwos is not a function". i32 fields
     // (updateCount, and everything inside statA/statB) don't need this.
     const fixtureSummary = {
-      fixtureId: new BN(validation.summary.fixtureId),
+      fixtureId: new anchor.BN(validation.summary.fixtureId),
       eventsSubTreeRoot: toByteArray32(validation.summary.eventStatsSubTreeRoot),
       updateStats: {
         updateCount: validation.summary.updateStats.updateCount,
-        minTimestamp: new BN(validation.summary.updateStats.minTimestamp),
-        maxTimestamp: new BN(validation.summary.updateStats.maxTimestamp),
+        minTimestamp: new anchor.BN(validation.summary.updateStats.minTimestamp),
+        maxTimestamp: new anchor.BN(validation.summary.updateStats.maxTimestamp),
       },
     };
 
     const tx = buildSettleMarketTx(
       program,
       {
-        ts:             new BN(validation.ts),
+        ts:             new anchor.BN(validation.ts),
         fixtureSummary,
         fixtureProof:   normalizeProof(validation.subTreeProof),
         mainTreeProof:  normalizeProof(validation.mainTreeProof),
@@ -898,8 +781,8 @@ export default function App() {
     // fail, funds may be lost" warning with no indication of which check
     // actually failed.
     tx.feePayer = wallet.publicKey;
-    const simBlockhash = await connection.getLatestBlockhash("confirmed");
-    tx.recentBlockhash = simBlockhash.blockhash;
+    const { blockhash } = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
 
     const sim = await connection.simulateTransaction(tx);
     if (sim.value.err) {
@@ -911,13 +794,8 @@ export default function App() {
       throw new Error(`Settlement rejected on-chain: ${reason}`);
     }
 
-    // Re-signs with a fresh blockhash on each attempt if the previous one
-    // expired waiting on wallet approval — see sendAndConfirmWithRetry.
-    const sig = await sendAndConfirmWithRetry(connection, wallet, (latestBlockhash) => {
-      tx.recentBlockhash = latestBlockhash.blockhash;
-      tx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
-      return tx;
-    });
+    const sig = await wallet.sendTransaction(tx, connection);
+    await connection.confirmTransaction(sig, "confirmed");
 
     const acc = await program.account.market.fetch(marketPda);
     setMarkets(prev => prev.map(m =>
@@ -952,21 +830,9 @@ export default function App() {
       data,
     });
 
-    const simBlockhash = await connection.getLatestBlockhash("processed");
-    const simTx = new anchor.web3.Transaction({
-      feePayer: wallet.publicKey,
-      blockhash: simBlockhash.blockhash,
-      lastValidBlockHeight: simBlockhash.lastValidBlockHeight,
-    }).add(ix);
-    await simulateOrThrow(connection, simTx, "Claim");
-
-    const sig = await sendAndConfirmWithRetry(connection, wallet, (latestBlockhash) =>
-      new anchor.web3.Transaction({
-        feePayer: wallet.publicKey,
-        blockhash: latestBlockhash.blockhash,
-        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
-      }).add(ix)
-    );
+    const tx = new anchor.web3.Transaction().add(ix);
+    const sig = await wallet.sendTransaction(tx, connection);
+    await connection.confirmTransaction(sig, "confirmed");
 
     return `Claimed! TX ${sig.slice(0, 12)}…`;
   }, [wallet, connection]);
@@ -1069,7 +935,7 @@ export default function App() {
             <p className="font-mono text-xs uppercase tracking-[0.3em] text-card-yes mb-6 flex items-center gap-3">
               World Cup · TxLINE on-chain proofs · Solana devnet
             </p>
-            <h1 className="font-display text-[clamp(4.25rem,0.9rem+10vw,9.5rem)] leading-[0.95] flap-glow">
+            <h1 className="font-display text-[clamp(3.5rem,0.9rem+10vw,9.5rem)] leading-[0.95] flap-glow">
               <SplitFlap text="PREDICT." className="block" />
               <SplitFlap text="VERIFY."  delay={0.5} className="block text-card-yes" />
               <SplitFlap text="SETTLE."  delay={1.0} className="block" />

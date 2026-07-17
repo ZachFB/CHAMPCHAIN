@@ -295,7 +295,7 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
             </span>
             Match in progress — betting closed
           </div>
-        ) : market.userHasBet ? (
+        ) : (
           <div className="space-y-2">
             <button
               onClick={handleSettleClick}
@@ -309,12 +309,6 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
             {note && (
               <p className="font-mono text-[11px] text-haze leading-snug">{note}</p>
             )}
-          </div>
-        ) : (
-          <div className="flex items-center justify-center py-1">
-            <span className="font-mono text-[11px] tracking-widest uppercase text-haze border border-haze/25 px-4 py-1.5 rounded-full">
-              Finished — you didn't bet on this one
-            </span>
           </div>
         )}
       </div>

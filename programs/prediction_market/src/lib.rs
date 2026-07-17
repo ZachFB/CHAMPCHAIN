@@ -21,6 +21,25 @@ pub const VALIDATE_STAT_DISCRIMINATOR: [u8; 8] = [107, 197, 232, 90, 191, 136, 1
 /// blocked during this window to prevent post-result cancellation griefing.
 pub const CANCEL_GRACE_PERIOD_SECS: i64 = 24 * 60 * 60; // 24h
 
+/// A fixed, protocol-wide floor (from `close_ts`) that a TxLINE proof's own
+/// timestamp must clear to count as "fresh enough to settle on" — used
+/// instead of each market's own `earliest_settle_ts` guess for this
+/// specific check. `earliest_settle_ts` is a per-market estimate set once
+/// at market creation (e.g. "expect extra time, add 2h15") and can turn out
+/// to be a worse guess than reality (a match that finishes in regulation
+/// with no extra time, say). Since a finished match's TxLINE data timestamp
+/// is fixed forever once play ends, gating proof freshness on a guess that
+/// landed too late made settlement permanently unreachable for anyone
+/// except the market's authority (only they can lower earliest_settle_ts
+/// via `set_earliest_settle_ts`) — defeating the "anyone can settle"
+/// design. 80 minutes covers real halftime + regulation time with room to
+/// spare (kickoff to full-time whistle, even with no stoppage at all, is
+/// realistically well over 90 minutes once a 15+ minute halftime is
+/// included) while staying safely short of every real match's actual
+/// finish — so this floor is essentially never the reason a genuinely
+/// finished match's real proof gets rejected as stale, for any caller.
+pub const PROOF_FRESHNESS_FLOOR_SECS: i64 = 80 * 60; // 80 minutes
+
 #[program]
 pub mod prediction_market {
     use super::*;
@@ -151,12 +170,27 @@ pub mod prediction_market {
             MarketError::AlreadySettled
         );
         // Do not settle before the conservative finality window, even if a
-        // technically valid live-score proof already exists.
+        // technically valid live-score proof already exists. This gate is
+        // purely wall-clock (Clock::get() always eventually exceeds any
+        // earliest_settle_ts, however it was set) — it only ever delays
+        // when settlement can first be attempted, it can never permanently
+        // block it, so it's safe to keep tied to the market's own value.
         require!(
             Clock::get()?.unix_timestamp >= market.earliest_settle_ts,
             MarketError::TooEarlyToSettle
         );
-        require_fresh_txline_batch(ts, &fixture_summary, market.earliest_settle_ts)?;
+        // Proof freshness, in contrast, is compared against a fixed
+        // protocol floor (close_ts + PROOF_FRESHNESS_FLOOR_SECS) rather
+        // than market.earliest_settle_ts — see PROOF_FRESHNESS_FLOOR_SECS'
+        // doc comment for why: a per-market guess can land after a real,
+        // already-finished match's fixed TxLINE timestamp, which would
+        // otherwise make this check permanently unsatisfiable for anyone
+        // but the authority.
+        let proof_freshness_floor = market
+            .close_ts
+            .checked_add(PROOF_FRESHNESS_FLOOR_SECS)
+            .ok_or(MarketError::Overflow)?;
+        require_fresh_txline_batch(ts, &fixture_summary, proof_freshness_floor)?;
         require_bounded_proof(&fixture_proof)?;
         require_bounded_proof(&main_tree_proof)?;
         require_bounded_proof(&stat_a.stat_proof)?;
