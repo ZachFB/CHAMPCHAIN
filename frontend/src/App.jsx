@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import gsap from "gsap";
+import { ScrollTrigger } from "gsap/ScrollTrigger";
 import { useMutation } from "@tanstack/react-query";
 import { Connection, PublicKey, clusterApiUrl } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
@@ -129,6 +130,25 @@ function deriveDailyScoresRootsPda(epochDay) {
 
 // Errors that are worth a silent retry (RPC hiccup) vs. errors that should
 // surface to the user immediately (wallet rejected, insufficient funds).
+// Phantom's own "Simulation failed" pre-approval warning is a much
+// stronger signal than the generic "unknown domain" one — it usually
+// means the instruction would genuinely fail on-chain, not just that the
+// program is unrecognized. Simulating here first, before ever asking the
+// wallet to sign, surfaces the SAME failure but with the actual Anchor
+// error message and program logs instead of Phantom's opaque "simulation
+// failed" with no detail.
+async function simulateOrThrow(connection, tx, label) {
+  const sim = await connection.simulateTransaction(tx);
+  if (sim.value.err) {
+    const logs = sim.value.logs || [];
+    const anchorErrorLine = logs.find((l) => l.includes("Error Message:"));
+    const reason = anchorErrorLine
+      ? anchorErrorLine.split("Error Message:")[1].trim()
+      : logs.find((l) => l.includes("Program log:")) ?? JSON.stringify(sim.value.err);
+    throw new Error(`${label} rejected on-chain: ${reason}`);
+  }
+}
+
 function isTransientRpcError(err) {
   const msg = (err?.message || "").toLowerCase();
   return (
@@ -137,6 +157,48 @@ function isTransientRpcError(err) {
     msg.includes("429") ||
     msg.includes("blockhash not found")
   );
+}
+
+// Wallet approval (waiting for the person to click "Approve" in Phantom/
+// Solflare/etc.) can easily eat past a blockhash's ~60-90 second validity
+// window, especially on a sometimes-slow Devnet — that's exactly what
+// "Signature ... has expired: block height exceeded" means: the tx was
+// signed and sent, but too late for the blockhash it was built with. The
+// fix isn't a longer timeout (there's no such setting — validity is a
+// fixed number of blocks), it's retrying with a FRESH blockhash instead of
+// surfacing this as a dead end. `buildTx` receives {blockhash,
+// lastValidBlockHeight} and must return a ready-to-sign Transaction.
+async function sendAndConfirmWithRetry(connection, wallet, buildTx, { maxAttempts = 5 } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    // "processed" is the least-lagged commitment available — it gives a
+    // blockhash a few seconds fresher than "confirmed" would, which is
+    // pure margin against a slow wallet-approval flow (e.g. Phantom's
+    // "unknown domain" risk warning adding extra clicks/seconds before
+    // the person ever reaches the final Confirm button).
+    const latestBlockhash = await connection.getLatestBlockhash("processed");
+    const tx = await buildTx(latestBlockhash);
+    try {
+      const sig = await wallet.sendTransaction(tx, connection);
+      const confirmation = await connection.confirmTransaction(
+        { signature: sig, ...latestBlockhash },
+        "confirmed"
+      );
+      if (confirmation.value.err) {
+        throw new Error(`Transaction landed but failed on-chain: ${JSON.stringify(confirmation.value.err)}`);
+      }
+      return sig;
+    } catch (err) {
+      lastErr = err;
+      const msg = (err?.message || "").toLowerCase();
+      const expired = msg.includes("block height exceeded") || msg.includes("expired");
+      if (!expired || attempt === maxAttempts - 1) throw err;
+      // Expired and attempts remain: loop again, a fresh blockhash gets
+      // fetched at the top — the person doesn't have to click anything
+      // again since the instructions themselves haven't changed.
+    }
+  }
+  throw lastErr;
 }
 
 // Unwraps wallet-adapter's generic "Unexpected error" wrapper to find the
@@ -480,6 +542,29 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wallet.publicKey?.toBase58()]);
 
+  // The single ScrollTrigger.refresh() in main.jsx (on window "load") fires
+  // before market data ever arrives — `markets` starts as DEMO_MARKETS and
+  // is replaced by refreshMarketStatus's on-chain read a moment later,
+  // which changes how tall the Markets grid actually is. Every trigger for
+  // everything BELOW it (Architecture, Program badge) was already
+  // positioned against the page's shorter, pre-data height, which is
+  // exactly why they needed to be scrolled well past before firing — not
+  // a mobile-only bug, just far more visible there since mobile viewports
+  // leave less room for error. Refreshing again once `markets` actually
+  // changes — after two animation frames, so the browser has genuinely
+  // finished laying out the new content, not just started rendering it —
+  // re-measures every trigger against the page's real, final height.
+  useEffect(() => {
+    let raf1, raf2;
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => ScrollTrigger.refresh());
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+  }, [markets]);
+
   // TxLINE authenticated SSE stream — live score badge in header.
   // EventSource can't carry the required Authorization/X-Api-Token headers,
   // so this uses the fetch+ReadableStream client from lib/txlineStream.js.
@@ -552,9 +637,26 @@ export default function App() {
         data,
       });
 
-      const tx = new anchor.web3.Transaction().add(ix);
-      const sig = await wallet.sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, "confirmed");
+      // Simulated once, up front, with its own throwaway blockhash — not
+      // inside the retry loop below, so this doesn't eat into the actual
+      // send attempts' time budget. This is what would have shown Phantom's
+      // "simulation failed" reason in our own console/toast instead of
+      // leaving it opaque.
+      const simBlockhash = await connection.getLatestBlockhash("processed");
+      const simTx = new anchor.web3.Transaction({
+        feePayer: wallet.publicKey,
+        blockhash: simBlockhash.blockhash,
+        lastValidBlockHeight: simBlockhash.lastValidBlockHeight,
+      }).add(ix);
+      await simulateOrThrow(connection, simTx, "Bet");
+
+      const sig = await sendAndConfirmWithRetry(connection, wallet, (latestBlockhash) =>
+        new anchor.web3.Transaction({
+          feePayer: wallet.publicKey,
+          blockhash: latestBlockhash.blockhash,
+          lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+        }).add(ix)
+      );
 
       const acc = await program.account.market.fetch(marketPda);
       return { matchId, sig, acc };
@@ -764,8 +866,8 @@ export default function App() {
     // fail, funds may be lost" warning with no indication of which check
     // actually failed.
     tx.feePayer = wallet.publicKey;
-    const { blockhash } = await connection.getLatestBlockhash();
-    tx.recentBlockhash = blockhash;
+    const simBlockhash = await connection.getLatestBlockhash("confirmed");
+    tx.recentBlockhash = simBlockhash.blockhash;
 
     const sim = await connection.simulateTransaction(tx);
     if (sim.value.err) {
@@ -777,8 +879,13 @@ export default function App() {
       throw new Error(`Settlement rejected on-chain: ${reason}`);
     }
 
-    const sig = await wallet.sendTransaction(tx, connection);
-    await connection.confirmTransaction(sig, "confirmed");
+    // Re-signs with a fresh blockhash on each attempt if the previous one
+    // expired waiting on wallet approval — see sendAndConfirmWithRetry.
+    const sig = await sendAndConfirmWithRetry(connection, wallet, (latestBlockhash) => {
+      tx.recentBlockhash = latestBlockhash.blockhash;
+      tx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
+      return tx;
+    });
 
     const acc = await program.account.market.fetch(marketPda);
     setMarkets(prev => prev.map(m =>
@@ -813,9 +920,21 @@ export default function App() {
       data,
     });
 
-    const tx = new anchor.web3.Transaction().add(ix);
-    const sig = await wallet.sendTransaction(tx, connection);
-    await connection.confirmTransaction(sig, "confirmed");
+    const simBlockhash = await connection.getLatestBlockhash("processed");
+    const simTx = new anchor.web3.Transaction({
+      feePayer: wallet.publicKey,
+      blockhash: simBlockhash.blockhash,
+      lastValidBlockHeight: simBlockhash.lastValidBlockHeight,
+    }).add(ix);
+    await simulateOrThrow(connection, simTx, "Claim");
+
+    const sig = await sendAndConfirmWithRetry(connection, wallet, (latestBlockhash) =>
+      new anchor.web3.Transaction({
+        feePayer: wallet.publicKey,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      }).add(ix)
+    );
 
     return `Claimed! TX ${sig.slice(0, 12)}…`;
   }, [wallet, connection]);
@@ -918,7 +1037,7 @@ export default function App() {
             <p className="font-mono text-xs uppercase tracking-[0.3em] text-card-yes mb-6 flex items-center gap-3">
               World Cup · TxLINE on-chain proofs · Solana devnet
             </p>
-            <h1 className="font-display text-[clamp(3.5rem,0.9rem+10vw,9.5rem)] leading-[0.95] flap-glow">
+            <h1 className="font-display text-[clamp(4.25rem,0.9rem+10vw,9.5rem)] leading-[0.95] flap-glow">
               <SplitFlap text="PREDICT." className="block" />
               <SplitFlap text="VERIFY."  delay={0.5} className="block text-card-yes" />
               <SplitFlap text="SETTLE."  delay={1.0} className="block" />
