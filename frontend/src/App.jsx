@@ -307,6 +307,7 @@ const COUNTRY_CODES = {
   ARG: "Argentina", BEL: "Belgium",  BRA: "Brazil",   CRO: "Croatia",
   ENG: "England",   ESP: "Spain",    FRA: "France",   MAR: "Morocco",
   MEX: "Mexico",    NOR: "Norway",   POR: "Portugal", USA: "USA",
+  SUI: "Switzerland",
 };
 // Knockout-stage markets created before the two finalists were known
 // (e.g. "WC2026-FINAL", set up as a placeholder while semifinals were

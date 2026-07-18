@@ -52,6 +52,13 @@ const STAGE_BADGES = {
 // not listed here (e.g. still-unconfirmed group matches) falls back to
 // "group" rather than a guess.
 const MATCH_STAGE = {
+  "WC2026-POR-ESP": "round16",
+  "WC2026-USA-BEL": "round16",
+  "WC2026-ENG-MEX": "round16",
+  "WC2026-NOR-ENG": "quarterfinal",
+  "WC2026-ESP-BEL": "quarterfinal",
+  "WC2026-ARG-SUI": "quarterfinal",
+  "WC2026-FRA-MAR": "quarterfinal",
   "WC2026-ENG-ARG": "semifinal",
   "WC2026-FRA-ESP": "semifinal",
   "WC2026-FRA-ENG": "third_place",
@@ -188,7 +195,7 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
               hasn't been settled yet, so a bettor can see both timelines
               from the moment they place a bet: when betting ends, and
               separately, when settlement becomes attemptable. */}
-          {!isComing && market.fixtureId && market.outcome === "pending" && market.earliestSettleTs && (
+          {!isComing && !!market.fixtureId && market.outcome === "pending" && !!market.earliestSettleTs && (
             <div className="flex items-center justify-end mt-0.5">
               <span className="font-mono text-[11px] tracking-widest text-haze">
                 {settleRemaining > 0 ? `Settles in ${settleCountdown}` : "Settlement open"}
