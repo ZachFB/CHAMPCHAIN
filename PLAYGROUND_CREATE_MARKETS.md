@@ -38,6 +38,40 @@ you already pulled the `fixtureId`s from, before trusting `statAKey` vs
    restriction — any signer can create a market.
 3. Open the **Client** tab and paste the script below.
 
+## A note on choosing `earliestSettleTs`
+
+`earliestSettleTs` only has to satisfy one on-chain rule: it must be
+strictly after `closeTs` (`InvalidSettleTime` otherwise). It is **not**
+what protects against settling on a mid-match score — that job already
+belongs to a separate, fixed guard in `lib.rs`
+(`PROOF_FRESHNESS_FLOOR_SECS`, `close_ts + 80 minutes`), which doesn't
+depend on this value at all.
+
+Setting `earliestSettleTs` to a big guessed margin (e.g. `closeTs + 2h15`,
+to cover possible extra time) has a real downside: if the match actually
+finishes before that guess, the market is stuck until the *market's
+authority specifically* calls `setEarliestSettleTs` to correct it —
+anyone else attempting `settleMarket` in the meantime hits `StaleProof`
+tied to a value only the authority can lower. That defeats the
+"permissionless settlement" design in practice, even though
+`settleMarket` itself has no authority check.
+
+The scripts below now use `closeTs + 60` (the minimum allowed gap)
+instead. This means:
+- The wall-clock check (`now >= earliestSettleTs`) is satisfied almost
+  immediately after the match's scheduled end.
+- The real protection against an early/mid-match settlement is still the
+  fixed 80-minute floor — untouched, and not something any market's
+  timestamps can weaken.
+- Nobody needs to be the authority, or even be watching the clock, for
+  settlement to go through — anyone can call `settleMarket` once TxLINE
+  has posted final data, at any time after that.
+
+This is a change to how new markets are *created* going forward — it
+doesn't touch `lib.rs`, `App.jsx`, or the IDL, and it doesn't retroactively
+fix markets already created with a large margin (those still need one
+authority-run `setEarliestSettleTs` correction, same as before).
+
 ## Step 2 — create m2 through m5, fresh, with real fixtureIds baked in
 
 ```ts
@@ -48,7 +82,10 @@ const markets = [
     statAKey: 1, statBKey: null, op: null,
     predicate: { threshold: 1, comparison: { greaterThan: {} } }, // Portugal > 1.5 goals
     closeTs: new anchor.BN(Math.floor(new Date("2026-07-06T19:00:00Z").getTime() / 1000)),
-    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-06T21:15:00Z").getTime() / 1000)),
+    // closeTs + 60s (minimum allowed gap) — see "A note on choosing
+    // earliestSettleTs" above for why this stays minimal instead of a
+    // big guessed margin.
+    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-06T19:00:00Z").getTime() / 1000) + 60),
   },
   {
     matchId: "WC2026-USA-BEL",
@@ -56,7 +93,7 @@ const markets = [
     statAKey: 1, statBKey: 2, op: { add: {} },
     predicate: { threshold: 2, comparison: { greaterThan: {} } }, // total goals > 2.5
     closeTs: new anchor.BN(Math.floor(new Date("2026-07-07T00:00:00Z").getTime() / 1000)),
-    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-07T02:15:00Z").getTime() / 1000)),
+    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-07T00:00:00Z").getTime() / 1000) + 60),
   },
   {
     matchId: "WC2026-FRA-MAR",
@@ -64,7 +101,7 @@ const markets = [
     statAKey: 1, statBKey: 2, op: { subtract: {} },
     predicate: { threshold: 1, comparison: { greaterThan: {} } }, // France wins by > 1 goal
     closeTs: new anchor.BN(Math.floor(new Date("2026-07-09T20:00:00Z").getTime() / 1000)),
-    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-09T22:15:00Z").getTime() / 1000)),
+    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-09T20:00:00Z").getTime() / 1000) + 60),
   },
   {
     matchId: "WC2026-ENG-MEX",
@@ -74,7 +111,7 @@ const markets = [
     // Already finished — timestamps are deliberately in the past so this
     // market is immediately ready to demo a real settle_market call.
     closeTs: new anchor.BN(Math.floor(new Date("2026-07-05T20:00:00Z").getTime() / 1000)),
-    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-05T22:15:00Z").getTime() / 1000)),
+    earliestSettleTs: new anchor.BN(Math.floor(new Date("2026-07-05T20:00:00Z").getTime() / 1000) + 60),
   },
 ];
 
@@ -173,7 +210,7 @@ const txSig = await pg.program.methods
     { threshold: 2, comparison: { greaterThan: {} } }, // adjust predicate per match
     { add: {} },
     new anchor.BN(Math.floor(new Date("2026-07-11T21:00:00Z").getTime() / 1000)),      // closeTs
-    new anchor.BN(Math.floor(new Date("2026-07-11T23:15:00Z").getTime() / 1000))       // earliestSettleTs
+    new anchor.BN(Math.floor(new Date("2026-07-11T21:00:00Z").getTime() / 1000) + 60)  // earliestSettleTs = closeTs + 60s
   )
   .accounts({
     authority: pg.wallet.publicKey,
@@ -318,7 +355,7 @@ for (const m of markets) {
 
   const now = Math.floor(Date.now() / 1000);
   const closeTs = new anchor.BN(now + 5 * 60);
-  const earliestSettleTs = new anchor.BN(now + 10 * 60);
+  const earliestSettleTs = closeTs.add(new anchor.BN(60)); // closeTs + 60s
 
   try {
     const sig = await pg.program.methods

@@ -72,6 +72,7 @@ const INSTRUCTION_DISCRIMINATORS = {
   cancelMarket: [205, 121, 84, 210, 222, 71, 150, 11],
   claimWinnings: [161, 215, 24, 59, 14, 236, 242, 221],
   setFixtureId: [201, 173, 201, 79, 20, 6, 54, 205],
+  setEarliestSettleTs: [11, 250, 139, 198, 46, 106, 14, 0],
   closeMarket: [88, 154, 248, 186, 48, 14, 123, 244],
 };
 

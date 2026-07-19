@@ -39,41 +39,19 @@ const NETWORK          = import.meta.env.VITE_HELIUS_RPC_URL || clusterApiUrl("d
 // `refreshMarketStatus()` scanning the chain for real Market accounts. Run
 // PLAYGROUND_CREATE_MARKETS.md's scripts yourself first; the site will pick
 // up whatever exists on-chain within ~20 seconds (or via "Refresh").
-const DEMO_MARKETS = [
-  {
-    id: "por-esp",
-    matchId: "WC2026-POR-ESP",
-    fixtureId: 18198205,
-    teamA: "Portugal", teamB: "Spain",
-    question: "Does Portugal score more than 1 goal (2+) in regulation?",
-    statAKey: 1, statBKey: null,
-    onChain: true,
-    totalYes: 0, totalNo: 0,
-  },
-  {
-    id: "usa-bel",
-    matchId: "WC2026-USA-BEL",
-    fixtureId: 18193785,
-    teamA: "USA", teamB: "Belgium",
-    question: "Is the combined goal count (USA + Belgium) more than 2 (i.e. 3+)?",
-    statAKey: 1, statBKey: 2,
-    onChain: true,
-    totalYes: 0, totalNo: 0,
-  },
-  {
-    id: "eng-mex",
-    matchId: "WC2026-ENG-MEX",
-    fixtureId: 18192996,
-    // TxLINE lists Mexico as the home / Participant 1 side for this fixture
-    // (see PLAYGROUND_CREATE_MARKETS.md) — statAKey=1 is Mexico's goals,
-    // statBKey=2 is England's, not the other way around.
-    teamA: "Mexico", teamB: "England",
-    question: "Is the combined goal count (Mexico + England) more than 4 (i.e. 5+)?",
-    statAKey: 1, statBKey: 2,
-    onChain: true,
-    totalYes: 0, totalNo: 0,
-  },
-];
+//
+// Deliberately empty now. POR-ESP/USA-BEL/ENG-MEX used to be hardcoded
+// here — they were permanently closed on-chain (close_market) once their
+// settlement got stuck on a stale earliestSettleTs, but leaving their
+// entries in this array kept describing them locally with onChain:true
+// and a real fixtureId. Once refreshMarketStatus found the account gone
+// (fetchNullable -> null) it correctly fell back to onChain:false — and
+// the display rule "not on-chain = Coming soon" then made a permanently
+// CLOSED market look exactly like one that was never created yet. The
+// actual fix is here, not on-chain: a market that's gone for good must
+// not be described at all, not even as onChain:true — otherwise it keeps
+// resurrecting itself as a ghost "Coming soon" card every refresh.
+const DEMO_MARKETS = [];
 
 const TICKER_ITEMS = [
   "Merkle proof validated — fixture #50421 — epoch_day 20392",
