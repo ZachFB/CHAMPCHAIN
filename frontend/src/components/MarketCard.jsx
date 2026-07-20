@@ -276,6 +276,24 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
             <div className="text-center font-mono text-xs text-card-yes border border-card-yes/30 py-2 rounded-sm">
               Settled: {market.outcome.toUpperCase()}
             </div>
+            {/* Anyone can verify this independently, at any time — not just
+                right after clicking Settle. The market account's own
+                transaction history on Explorer includes the settle_market
+                call, which itself contains the CPI into TxLINE's
+                validate_stat — that CPI IS the cryptographic proof this
+                whole project is built on, and it's permanently public,
+                not something that only exists in a toast message that
+                disappears on refresh. */}
+            {market.pda && (
+              <a
+                href={`https://explorer.solana.com/address/${market.pda}?cluster=devnet`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-center font-mono text-[10px] text-haze hover:text-card-yes underline decoration-dotted underline-offset-2 py-1"
+              >
+                View on-chain proof (TxLINE CPI) ↗
+              </a>
+            )}
             {(() => {
               const bet = market.userBet;
               if (!bet) {
