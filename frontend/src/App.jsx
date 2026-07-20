@@ -115,6 +115,44 @@ function deriveDailyScoresRootsPda(epochDay) {
   );
 }
 
+// Retroactive proof lookup — for markets settled/cancelled before this UI
+// ever captured the transaction signature at click-time (ENG-ARG, FRA-MAR,
+// FINAL), the only way to get the judge a real `/tx/{signature}` link is to
+// walk the market account's own transaction history and find the specific
+// instruction that produced its current state, rather than just linking to
+// the account overview page (which shows balance/owner but not the CPI proof
+// itself). `instructionName` is the Anchor-logged PascalCase instruction
+// name ("SettleMarket" or "CancelMarket") — Anchor always emits
+// "Program log: Instruction: <Name>" for the ix that ran, so matching that
+// exact line is a precise, non-guessable way to pick the right transaction
+// out of the account's full history (which may also contain bets, the
+// initialize_market call, etc). Only successful transactions (err === null)
+// are considered — a failed settlement attempt is not proof of anything.
+async function findInstructionSignature(connection, address, instructionName, { limit = 40 } = {}) {
+  let sigInfos;
+  try {
+    sigInfos = await connection.getSignaturesForAddress(address, { limit });
+  } catch (_) {
+    return null;
+  }
+  for (const info of sigInfos) {
+    if (info.err) continue;
+    try {
+      const tx = await connection.getTransaction(info.signature, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      const logs = tx?.meta?.logMessages ?? [];
+      if (logs.some((l) => l.includes(`Instruction: ${instructionName}`))) {
+        return info.signature;
+      }
+    } catch (_) {
+      // RPC hiccup fetching this one candidate — move on to the next.
+    }
+  }
+  return null;
+}
+
 // Errors that are worth a silent retry (RPC hiccup) vs. errors that should
 // surface to the user immediately (wallet rejected, insufficient funds).
 // Phantom's own "Simulation failed" pre-approval warning is a much
@@ -407,6 +445,12 @@ export default function App() {
   //      That's the actual meaning of "robust to a new market created
   //      later in Playground" — not just re-checking a fixed list.
   const [marketsSyncing, setMarketsSyncing] = useState(false);
+  // Keyed by market PDA (base58) -> settlement/cancellation signature.
+  // A ref, not state: it's pure memoization for findInstructionSignature
+  // (an RPC-heavy scan of an account's tx history), not something that
+  // should ever trigger a re-render on its own — the actual re-render
+  // happens via setMarkets once a market object carries settlementTx.
+  const settlementTxCache = useRef({});
   const refreshMarketStatus = useCallback(async () => {
     setMarketsSyncing(true);
     // A refresh that completes in under ~500ms (common for the automatic
@@ -523,6 +567,44 @@ export default function App() {
         withUserBet = withUserBet.map((m) => ({ ...m, userHasBet: false, userBet: null }));
       }
 
+      // Retroactive settlement-proof lookup. Markets settled through
+      // attemptSettlement() from now on get settlementTx set immediately
+      // (see its own setMarkets call below) — but ENG-ARG, FRA-MAR and
+      // FINAL were already settled before that capture existed, so their
+      // signature was never recorded anywhere. For any resolved market
+      // still missing it, walk its tx history once (cached thereafter in
+      // settlementTxCache, keyed by PDA) and find the actual SettleMarket
+      // (or CancelMarket, for refund-only markets) transaction — this is
+      // what lets MarketCard link straight to a real /tx/{signature} for
+      // every settled market, not just ones settled after this fix shipped.
+      withUserBet = await Promise.all(
+        withUserBet.map(async (m) => {
+          if (!m.onChain || !m.pda) return m;
+          const cached = settlementTxCache.current[m.pda];
+          if (cached) return { ...m, settlementTx: cached };
+          if (m.settlementTx) {
+            settlementTxCache.current[m.pda] = m.settlementTx;
+            return m;
+          }
+          // Nothing to find yet for a market that hasn't resolved — no
+          // settle/cancel transaction exists on it until it does.
+          if (m.outcome !== "yes" && m.outcome !== "no" && m.outcome !== "cancelled") {
+            return m;
+          }
+          const instructionName = m.outcome === "cancelled" ? "CancelMarket" : "SettleMarket";
+          const sig = await findInstructionSignature(
+            connection,
+            new PublicKey(m.pda),
+            instructionName
+          );
+          if (sig) {
+            settlementTxCache.current[m.pda] = sig;
+            return { ...m, settlementTx: sig };
+          }
+          return m;
+        })
+      );
+
       // Cancelled markets stay visible (not filtered out) — that's the only
       // way a bettor can ever reach the CLAIM WINNINGS button to get their
       // refund. Hiding them would strand real money with no UI path to it.
@@ -533,7 +615,7 @@ export default function App() {
       await minVisible;
       setMarketsSyncing(false);
     }
-  }, [wallet]);
+  }, [wallet, connection]);
 
   useEffect(() => {
     refreshMarketStatus();
@@ -939,9 +1021,14 @@ export default function App() {
     });
 
     const acc = await program.account.market.fetch(marketPda);
+    // Cached immediately (not just left to next refresh's retroactive scan)
+    // so the on-chain proof link in MarketCard is correct on THIS render —
+    // no gap where the market shows "Settled" but its proof link still
+    // points at the generic account page.
+    settlementTxCache.current[marketPda.toBase58()] = sig;
     setMarkets(prev => prev.map(m =>
       m.matchId === market.matchId
-        ? { ...m, outcome: Object.keys(acc.outcome)[0] }
+        ? { ...m, outcome: Object.keys(acc.outcome)[0], settlementTx: sig }
         : m
     ));
     return `Settled on-chain — TX ${sig.slice(0, 12)}…`;

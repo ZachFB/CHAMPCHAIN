@@ -277,23 +277,40 @@ export default function MarketCard({ market, onBet, onSettle, onClaim, isBetting
               Settled: {market.outcome.toUpperCase()}
             </div>
             {/* Anyone can verify this independently, at any time — not just
-                right after clicking Settle. The market account's own
-                transaction history on Explorer includes the settle_market
-                call, which itself contains the CPI into TxLINE's
-                validate_stat — that CPI IS the cryptographic proof this
-                whole project is built on, and it's permanently public,
-                not something that only exists in a toast message that
-                disappears on refresh. */}
-            {market.pda && (
+                right after clicking Settle. `market.settlementTx` is the
+                actual settle_market (or cancel_market) transaction
+                signature — set immediately when this wallet settles it, or
+                found retroactively by App.jsx scanning the account's own
+                tx history for markets settled before that capture existed.
+                Linking to /tx/{signature} lands directly on the transaction
+                whose logs contain the CPI into TxLINE's validate_stat —
+                that CPI IS the cryptographic proof this project is built
+                on. Linking to /address/{pda} instead (the previous, buggy
+                version) only ever showed balance/owner/size — never the
+                proof itself, leaving a judge to search the account's full
+                history by hand. If the lookup hasn't resolved yet (rare —
+                only right after a fresh settlement, before the next
+                refresh), fall back to the account page honestly labeled as
+                such, rather than pointing at a tx that might not be it. */}
+            {market.settlementTx ? (
               <a
-                href={`https://explorer.solana.com/address/${market.pda}?cluster=devnet`}
+                href={`https://explorer.solana.com/tx/${market.settlementTx}?cluster=devnet`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block text-center font-mono text-[10px] text-haze hover:text-card-yes underline decoration-dotted underline-offset-2 py-1"
               >
-                View on-chain proof (TxLINE CPI) ↗
+                View settlement proof (TxLINE CPI) ↗
               </a>
-            )}
+            ) : market.pda ? (
+              <a
+                href={`https://explorer.solana.com/address/${market.pda}?cluster=devnet`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block text-center font-mono text-[10px] text-haze/60 hover:text-card-yes underline decoration-dotted underline-offset-2 py-1"
+              >
+                View market account (settlement tx not yet located) ↗
+              </a>
+            ) : null}
             {(() => {
               const bet = market.userBet;
               if (!bet) {
